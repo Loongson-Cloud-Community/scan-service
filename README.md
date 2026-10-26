@@ -76,6 +76,10 @@ docker compose up -d rpm-scan-agent
 页面和只读 API 允许匿名访问。主动同步不显示在公共页面中，只允许内部运维携带
 `SCAN_SERVICE_OPERATOR_TOKEN` 调用。
 
+产物查看和下载由 Portal 流式代理，不再把完整文件读入内存。解析与压缩包展开
+上限配置在 `scan-results-portal/config/config.yaml` 的 `artifacts` 分区；公网
+gateway 还会限制单一来源的下载速率和并发连接数。
+
 ## 持久化数据
 
 | 数据 | 位置 |
