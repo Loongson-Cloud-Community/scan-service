@@ -3,7 +3,6 @@
 # Manages every component related to package scanning:
 #   - postgres              scan result storage
 #   - scan-results-portal   Scan Results Portal (web UI + Jenkins ingest API)
-#   - portal-gateway        public HTTPS entry point
 #   - rpm-scan-agent        Jenkins inbound agent, cve-bin-tool RPM scan
 #   - srpm-scan-agent       Jenkins inbound agent, csmock SRPM scan
 #
@@ -61,8 +60,8 @@ services:
       SCAN_SERVICE_CONFIG: /etc/scan-service/config.yaml
     volumes:
       - ./scan-results-portal/config:/etc/scan-service:ro
-    expose:
-      - "8080"
+    ports:
+      - ${PORTAL_BIND_ADDRESS:-0.0.0.0}:${PORTAL_HTTP_PORT:-8081}:8080
     healthcheck:
       test:
         - CMD
@@ -73,31 +72,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    restart: unless-stopped
-
-  portal-gateway:
-    image: lcr.loongnix.cn/library/nginx:1.28.0-alpine3.21@sha256:b466c69663776880c911dd44de1f4a4848fd2a749ef6f5528a2530c3f60cbe1b
-    container_name: scan-results-portal-gateway
-    depends_on:
-      scan-results-portal:
-        condition: service_healthy
-    environment:
-      PORTAL_HTTPS_PORT: ${PORTAL_HTTPS_PORT:-8081}
-      NGINX_ENVSUBST_FILTER: PORTAL_HTTPS_PORT
-    ports:
-      - "${PORTAL_HTTP_PORT:-8080}:8080"
-      - "${PORTAL_HTTPS_PORT:-8081}:8443"
-    volumes:
-      - ./gateway/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - ./gateway/tls:/etc/nginx/tls:ro
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - wget --no-check-certificate -q -O /dev/null https://127.0.0.1:8443/readyz
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
     restart: unless-stopped
 
   rpm-scan-agent:
@@ -172,7 +146,7 @@ services:
         JENKINS_AGENT_JAR_URL: ${JENKINS_AGENT_JAR_URL:?JENKINS_AGENT_JAR_URL must be set in .env}
     # 让 jenkins 用户能访问 docker.sock（其属组 gid 由 .env 的 DOCKER_GID 指定）
     group_add:
-      - "${DOCKER_GID:?DOCKER_GID must be set in .env}"
+      - ${DOCKER_GID:?DOCKER_GID must be set in .env}
     environment:
       JENKINS_URL: ${JENKINS_URL:?JENKINS_URL must be set in .env}
       JENKINS_AGENT_NAME: ${SRPM_SCAN_AGENT_NAME:?SRPM_SCAN_AGENT_NAME must be set in .env}

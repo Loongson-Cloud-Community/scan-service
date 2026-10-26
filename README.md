@@ -10,7 +10,6 @@
 
 | 服务 | 容器名称 | 作用 |
 | --- | --- | --- |
-| portal-gateway | scan-results-portal-gateway | Portal 公网 HTTPS 入口和公开/内部路由隔离 |
 | scan-results-portal | scan-results-portal-service | 扫描结果展示门户 + Jenkins 事件接收 API |
 | postgres | scan-results-portal-postgres | 任务索引与结构化扫描结果存储 |
 | rpm-scan-agent | rpm-scan-agent | Jenkins inbound agent，执行 cve-bin-tool RPM 漏洞扫描 |
@@ -22,7 +21,7 @@
 scan-service/
 ├── docker-compose.yml              本栈的统一编排文件
 ├── .env                            本栈统一配置（按组件分区，参考 .env.example）
-├── gateway/                        Portal HTTPS 入口配置与证书挂载目录
+├── PORTAL-DEPLOYMENT.md            Portal 测试环境说明与生产环境的部署约定
 ├── scan-results-portal/            门户源码、Dockerfile、config、migrations
 ├── rpm-scan-agent/                 RPM 扫描 agent 源码与 Dockerfile
 └── srpm-scan-agent/                SRPM 扫描 agent 源码与 Dockerfile
@@ -32,13 +31,13 @@ scan-service/
 
 ## 启动
 
-启动前将 Portal 公网地址对应的 PEM 证书链和私钥分别放到
-`gateway/tls/tls.crt` 与 `gateway/tls/tls.key`。证书文件不会被 Git 跟踪。
-
 ~~~bash
 cp .env.example .env
 docker compose up -d --build
 ~~~
+
+测试阶段由 Portal 容器直接提供 HTTP 服务，默认地址为
+`http://<宿主机>:8081` (仅用于受控内网测试)。
 
 只重建/重启单个组件：
 
@@ -70,15 +69,17 @@ docker compose up -d rpm-scan-agent
 - Jenkins 在栈外，通过各组件的 .env 访问：
   - agent 注册：`JENKINS_URL`
   - 门户读取构建与产物：`JENKINS_BASE_URL`
-- 对外只暴露 `portal-gateway`：HTTP `8080` 跳转到 HTTPS `8081`；Portal
-  应用容器不再直接映射宿主端口。
+- 测试阶段，Portal 通过宿主机 `8081` 端口提供 HTTP 访问。
+- 生产阶段由公网统一入口负责域名与 TLS，并通过内网
+  HTTP 转发到 Portal；完整接口和访问控制约定见
+  [PORTAL-DEPLOYMENT.md](PORTAL-DEPLOYMENT.md)。
 
-页面和只读 API 允许匿名访问。主动同步不显示在公共页面中，只允许内部运维携带
+页面和只读 API 允许匿名访问。主动同步不显示在公共页面中，只允许内网携带
 `SCAN_SERVICE_OPERATOR_TOKEN` 调用。
 
-产物查看和下载由 Portal 流式代理，不再把完整文件读入内存。解析与压缩包展开
-上限配置在 `scan-results-portal/config/config.yaml` 的 `artifacts` 分区；公网
-gateway 还会限制单一来源的下载速率和并发连接数。
+产物查看和下载由 Portal 流式代理，不把完整文件读入内存。解析与压缩包展开
+上限配置在 `scan-results-portal/config/config.yaml` 的 `artifacts` 分区；
+生产环境中还应由公网入口限制单一来源的请求速率和并发连接数。
 
 ## 持久化数据
 

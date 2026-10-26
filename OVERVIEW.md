@@ -7,7 +7,7 @@
 
 | 栈 | 容器 | 说明 |
 | --- | --- | --- |
-| `scan-service` | `scan-results-portal-gateway`、`scan-results-portal-service`、`scan-results-portal-postgres`、`rpm-scan-agent`、`srpm-scan-agent` | 扫描相关组件 |
+| `scan-service` | `scan-results-portal-service`、`scan-results-portal-postgres`、`rpm-scan-agent`、`srpm-scan-agent` | 扫描相关组件 |
 
 与 jenkins 之间**没有共享网络**，Jenkins 通过宿主地址/端口访问；scan-service 栈内
 部通过 compose 服务名互访。
@@ -16,19 +16,10 @@
 
 ### scan-results-portal（门户）
 
-- 存在形式：应用容器，仅在 Compose 私有网络监听 `8080`；公网流量由
-  `portal-gateway` 通过 HTTPS 转发；
+- 存在形式：应用容器，容器内监听 `8080`；测试阶段通过宿主机 HTTP 端口直接访问
 - 职责：接收扫描事件、经 Jenkins API 拉取并解析扫描结果、把结构化数据写入
   PostgreSQL、页面展示与产物代理下载；
 - 它**不执行扫描**，也不读输入包。
-
-### portal-gateway（公网入口）
-
-- 存在形式：Nginx 容器，对外提供 HTTPS，并将 HTTP 请求重定向到 HTTPS；
-- 匿名访客只能访问页面、查询 API 和允许公开的产物；
-- Jenkins 事件接口不经公网入口，主动同步接口仍由 Portal 校验独立的 operator Token。
-- 公开产物使用流式代理，并按来源限制请求速率与并发数；Portal 对解析文件和
-  压缩包展开另设不可绕过的大小、成员数与压缩比上限。
 
 ### postgres
 
@@ -120,7 +111,7 @@ SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH      srpm agent 工作目录 → /home/jenki
 scan-service/
 ├── docker-compose.yml              扫描栈统一编排
 ├── .env                            扫描栈统一配置
-├── gateway/                        Portal HTTPS 网关与证书挂载目录
+├── PORTAL-DEPLOYMENT.md            测试 HTTP 与企业统一入口部署约定
 ├── OVERVIEW.md                     本文档
 ├── scan-results-portal/            门户源码与 Dockerfile
 ├── rpm-scan-agent/                 RPM 扫描 agent 源码与 Dockerfile
