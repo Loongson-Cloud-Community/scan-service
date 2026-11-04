@@ -131,9 +131,9 @@ services:
   # mock 的 buildroot.lock 不会跨扫描互斥，多个 SRPM 扫描可以并发；代价是每次
   # 扫描都要在容器内初始化 chroot。
   #
-  # 两个 *_HOST_PATH 既作为挂载源，也注入容器环境：因为 `docker run -v` 的源
-  # 路径由宿主 daemon 解析，脚本必须知道宿主路径（容器内路径传给 -v 会静默
-  # 建出空目录）。
+  # 两个 *_HOST_PATH 既作为挂载源，也注入容器环境：因为 Docker bind mount 的源
+  # 路径由宿主 daemon 解析，脚本必须知道宿主路径。一次性扫描仅绑定当前
+  # SRPM 文件及输出子目录；使用 --mount，源路径缺失时直接失败。
   # ---------------------------------------------------------------------------
   srpm-scan-agent:
     image: srpm-scan-agent:latest
