@@ -75,6 +75,8 @@ services:
     restart: unless-stopped
 
   rpm-scan-agent:
+    # Reap descendants adopted after a cancelled scan exits.
+    init: true
     image: rpm-scan-agent:latest
     container_name: rpm-scan-agent
     build:
@@ -136,6 +138,7 @@ services:
   # SRPM 文件及输出子目录；使用 --mount，源路径缺失时直接失败。
   # ---------------------------------------------------------------------------
   srpm-scan-agent:
+    init: true
     image: srpm-scan-agent:latest
     container_name: srpm-scan-agent
     build:
