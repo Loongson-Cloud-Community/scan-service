@@ -22,7 +22,7 @@ name: scan-service
 
 services:
   postgres:
-    image: lcr.loongnix.cn/library/postgres:14-alpine3.23
+    image: lcr.loongnix.cn/library/postgres:17-alpine3.23
     container_name: scan-results-portal-postgres
     environment:
       POSTGRES_DB: scanportal
