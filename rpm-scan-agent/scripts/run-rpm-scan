@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Run the RPM workflow in its own process group and clean up on cancellation."""
+
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+
+def signal_group(process, sig):
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def wait_for_group(process, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        process.poll()  # Reap the direct child; the container init reaps orphans.
+        if not signal_group(process, 0):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def stop_group(process):
+    # These grace periods apply only to cleanup, never to scan execution or
+    # database-lock waiting. Include descendants even if the worker has exited.
+    if signal_group(process, signal.SIGTERM) and not wait_for_group(process, 5):
+        signal_group(process, signal.SIGKILL)
+        # Sending KILL alone does not mean descendants have released their locks.
+        if not wait_for_group(process, 1):
+            print("RPM scan processes did not exit after forced cleanup", file=sys.stderr)
+    process.wait()
+
+
+def main():
+    cancelled = None
+
+    def cancel(signum, _frame):
+        nonlocal cancelled
+        # Recording instead of raising also covers a signal received in Popen:
+        # finish assigning the child before attempting to clean it up.
+        if cancelled is None:
+            cancelled = signum
+
+    signal.signal(signal.SIGTERM, cancel)
+    signal.signal(signal.SIGINT, cancel)
+    worker = Path(__file__).resolve().parent.parent / "libexec/rpm-scan-agent/scan"
+    try:
+        process = subprocess.Popen(["bash", str(worker), *sys.argv[1:]], start_new_session=True)
+    except OSError as error:
+        print(f"Unable to launch RPM scan: {error}", file=sys.stderr)
+        return 127
+
+    try:
+        while cancelled is None and process.poll() is None:
+            time.sleep(0.05)
+    finally:
+        stop_group(process)
+
+    if cancelled is not None:
+        return 128 + cancelled
+    return process.returncode if process.returncode >= 0 else 128 - process.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

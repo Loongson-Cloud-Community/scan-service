@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${JENKINS_URL:?JENKINS_URL is required}"
+: "${JENKINS_AGENT_NAME:?JENKINS_AGENT_NAME is required}"
+: "${JENKINS_SECRET:?JENKINS_SECRET is required}"
+
+exec java -jar /usr/share/jenkins/agent.jar \
+  -url "${JENKINS_URL}" \
+  -name "${JENKINS_AGENT_NAME}" \
+  -secret "${JENKINS_SECRET}" \
+  -webSocket \
+  -workDir "${JENKINS_AGENT_WORKDIR:-/home/jenkins/agent}"

@@ -1,9 +1,0 @@
-[submodule "scan-results-portal"]
-	path = scan-results-portal
-	url = https://github.com/Chris-wh233/scan-results-portal.git
-[submodule "rpm-scan-agent"]
-	path = rpm-scan-agent
-	url = https://github.com/Chris-wh233/rpm-scan-agent.git
-[submodule "srpm-scan-agent"]
-	path = srpm-scan-agent
-	url = https://github.com/Chris-wh233/srpm-scan-agent.git

@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+#
+# 调度一次性 csmock 容器完成一次 SRPM 扫描。
+#
+# 设计要点：
+# · **不挂载宿主 mock 目录**：每个容器使用自己的 /var/lib/mock，mock 的
+#   buildroot.lock 因此落在各自容器的文件系统里，多个扫描可以并发。
+#   （若多个扫描共享同一个 mock 目录，mock 会用该锁互斥，第二个扫描直接失败。）
+# · 通过挂进来的 /var/run/docker.sock 调用宿主 Docker；
+#
+# 用法：
+#   run-srpm-scan SRPM_NAME [OUTPUT_DIR]
+#     SRPM_NAME   待扫描的 .src.rpm 文件名
+#     OUTPUT_DIR  agent 工作目录内的输出子目录，默认 srpm-scan-artifacts
+#   run-srpm-scan --dry-run SRPM_NAME [OUTPUT_DIR]
+#     只打印将要执行的 docker 命令，不做任何实际操作
+#
+# 退出码：
+#   2    参数/配置错误，或输入文件不存在
+#   其它 一次性 csmock 容器的退出码（csmock 正常结束返回 0，包含发现缺陷的情况）
+
+set -euo pipefail
+
+dry_run=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  dry_run=1
+  shift
+fi
+
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+  echo "Usage: run-srpm-scan [--dry-run] SRPM_NAME [OUTPUT_DIR]" >&2
+  exit 2
+fi
+
+srpm_name=$1
+output_dir=${2:-srpm-scan-artifacts}
+
+case "$srpm_name" in
+  ''|.|..|*/*|*\\*)
+    echo "SRPM_NAME must be a file name without path components: $srpm_name" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$srpm_name" =~ [[:cntrl:]] ]]; then
+  echo "SRPM_NAME must not contain control characters" >&2
+  exit 2
+fi
+
+if [[ "$srpm_name" != *.src.rpm ]]; then
+  echo "SRPM_NAME must end with .src.rpm: $srpm_name" >&2
+  exit 2
+fi
+
+: "${SRPM_SCAN_INPUT_HOST_PATH:?SRPM_SCAN_INPUT_HOST_PATH is required}"
+: "${SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH:?SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH is required}"
+: "${CSMOCK_IMAGE:?CSMOCK_IMAGE is required}"
+: "${MOCK_CONFIG:?MOCK_CONFIG is required}"
+
+if [[ "$CSMOCK_IMAGE" == -* || "$CSMOCK_IMAGE" =~ [[:cntrl:]] ]]; then
+  echo "CSMOCK_IMAGE must be an image reference, not a Docker option or control sequence" >&2
+  exit 2
+fi
+
+if [[ "$MOCK_CONFIG" == -* || "$MOCK_CONFIG" =~ [[:cntrl:]] ]]; then
+  echo "MOCK_CONFIG must be a single profile value, not an option or control sequence" >&2
+  exit 2
+fi
+
+# Plugin identifiers form a comma-separated list, not additional shell options.
+# Do not hardcode the available plugins; custom identifiers remain supported.
+if [[ -n "${CSMOCK_TOOLS:-}" && ! "$CSMOCK_TOOLS" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*(,[a-zA-Z0-9_][a-zA-Z0-9_.-]*)*$ ]]; then
+  echo "CSMOCK_TOOLS must be a comma-separated list of plugin identifiers" >&2
+  exit 2
+fi
+
+for host_path in "$SRPM_SCAN_INPUT_HOST_PATH" "$SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH"; do
+  if [[ "$host_path" != /* || "$host_path" =~ ^/+$ || "$host_path" =~ (^|/)\.\.?(/|$) || "$host_path" =~ [[:cntrl:]] ]]; then
+    echo "宿主挂载根必须为无路径跳转或控制字符的绝对目录，不能是根目录" >&2
+    exit 2
+  fi
+done
+
+agent_workdir=$(realpath -m -- "${JENKINS_AGENT_WORKDIR:-/home/jenkins/agent}")
+input_container_dir="/scan-input"
+
+nvr=${srpm_name%.src.rpm}
+# Docker daemon 读取宿主路径；脚本自己访问文件则用容器内路径。
+input_container="$input_container_dir/$srpm_name"
+input_host="$SRPM_SCAN_INPUT_HOST_PATH/$srpm_name"
+
+# 输出目录：容器内路径 -> 宿主机路径
+if [[ "$output_dir" =~ [[:cntrl:]] ]]; then
+  echo "输出目录不能包含控制字符" >&2
+  exit 2
+fi
+abs_output=$(realpath -m -- "$output_dir")
+case "$abs_output" in
+  "$agent_workdir"/*)
+    relative_output="${abs_output#"$agent_workdir"/}"
+    ;;
+  *)
+    echo "输出目录必须位于 agent 工作目录 $agent_workdir 内：$output_dir" >&2
+    exit 2
+    ;;
+esac
+host_output="$SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH/$relative_output"
+container_output="/output"
+
+if [[ -L "$input_container" ]]; then
+  echo "待扫描 SRPM 不能是符号链接：$input_container" >&2
+  exit 2
+fi
+if [[ "$dry_run" != "1" && ( ! -f "$input_container" || ! -s "$input_container" ) ]]; then
+  echo "找不到非空的常规 SRPM 文件：$input_container（宿主机目录 $SRPM_SCAN_INPUT_HOST_PATH）" >&2
+  exit 2
+fi
+
+bind_spec() {
+  # --mount fails on missing sources, unlike -v. CSV encoding preserves path
+  # commas/quotes without letting them add mount options or change the target.
+  python3 - "$@" <<'PY'
+import csv
+import sys
+
+csv.writer(sys.stdout, lineterminator="").writerow([
+    "type=bind", f"source={sys.argv[1]}", f"target={sys.argv[2]}", *sys.argv[3:],
+])
+PY
+}
+
+input_mount=$(bind_spec "$input_host" "/input/$srpm_name" readonly)
+output_mount=$(bind_spec "$host_output" "$container_output")
+
+csmock_tools_opt=()
+if [[ -n "${CSMOCK_TOOLS:-}" ]]; then
+  csmock_tools_opt=(-t "$CSMOCK_TOOLS")
+fi
+
+# 容器名带上构建号与 PID：不同扫描（含同名 SRPM 的并发扫描）互不冲突
+container_name="csmock-$(printf '%s' "$nvr" | tr -c 'a-zA-Z0-9_.-' '-')-${BUILD_NUMBER:-manual}-$$"
+
+create_cmd=(
+  docker create --rm --init
+  --name "$container_name"
+  --cap-add=SYS_ADMIN
+  --group-add "$(id -g)"
+  --mount "$input_mount"
+  --mount "$output_mount"
+  "$CSMOCK_IMAGE"
+  # Only static code belongs in sh -c. All scan values cross this boundary as
+  # positional arguments, so quotes and substitutions in them stay literal.
+  sh -eu -c '
+    mock_config=$1
+    archive_path=$2
+    input_srpm=$3
+    output_directory=$4
+    owner=$5
+    shift 5
+    csmock -r "$mock_config" "$@" --force -o "$archive_path" "$input_srpm"
+    sudo chown -R "$owner" -- "$output_directory"
+  ' run-srpm-scan "$MOCK_CONFIG" "$container_output/$nvr.tar.xz" \
+    "/input/$srpm_name" "$container_output" "$(id -u):$(id -g)" "${csmock_tools_opt[@]}"
+)
+start_cmd=(docker start --attach "$container_name")
+
+if [[ "$dry_run" == "1" ]]; then
+  printf '%q ' "${create_cmd[@]}"
+  printf '> /dev/null && '
+  printf '%q ' "${start_cmd[@]}"
+  printf '\n'
+  exit 0
+fi
+
+mkdir -p "$abs_output"
+# csmock 容器以 builder(1000) 运行；agent 用户可能不是 1000，因此让输出目录
+# 组可写并带 setgid，配合上面的 --group-add 让 builder 能写入。
+chmod 2775 "$abs_output"
+
+# Separate creation from attachment: cancellation cannot remove a container
+# before a background docker run has created it, then leave that container alive.
+created=0
+creating=0
+cancelled=0
+attach_pid=""
+cleanup() {
+  local status=$? message
+  trap '' INT TERM
+  if [[ "$created" == "1" ]]; then
+    # Cleanup-only bound; normal scan execution has no time limit.
+    if ! message=$(timeout --signal=KILL 10 docker rm -f "$container_name" 2>&1); then
+      if [[ "$message" != *"No such container:"* ]]; then
+        echo "无法清理扫描容器 $container_name：${message:-清理命令超时}" >&2
+      fi
+    fi
+  fi
+  if [[ -n "$attach_pid" ]]; then
+    kill -KILL "$attach_pid" 2>/dev/null || true
+    wait "$attach_pid" 2>/dev/null || true
+  fi
+  return "$status"
+}
+cancel() {
+  if [[ "$cancelled" == "0" ]]; then cancelled=$1; fi
+  # Bash defers traps while a foreground command runs. During create, finish
+  # recording ownership before exiting; never remove a name we failed to create.
+  if [[ "$creating" == "0" ]]; then exit "$cancelled"; fi
+}
+trap cleanup EXIT
+trap 'cancel 130' INT
+trap 'cancel 143' TERM
+
+creating=1
+if "${create_cmd[@]}" >/dev/null; then
+  created=1
+  create_status=0
+else
+  create_status=$?
+fi
+creating=0
+if [[ "$cancelled" != "0" ]]; then exit "$cancelled"; fi
+if [[ "$create_status" != "0" ]]; then exit "$create_status"; fi
+
+# wait is interruptible by shell traps, unlike a foreground docker attachment.
+"${start_cmd[@]}" &
+attach_pid=$!
+scan_status=0
+wait "$attach_pid" || scan_status=$?
+attach_pid=""
+if [[ "$scan_status" != "0" ]]; then exit "$scan_status"; fi
+
+echo "SRPM 扫描产物：$host_output/$nvr.tar.xz"

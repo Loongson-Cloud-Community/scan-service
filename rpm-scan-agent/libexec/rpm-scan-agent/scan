@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# Worker of run-rpm-scan; the launcher owns this process group's lifecycle.
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: run-rpm-scan RPM_NAME OUTPUT_DIRECTORY" >&2
+  exit 2
+fi
+
+rpm_name=$1
+output_dir=$2
+
+case "$rpm_name" in
+  ''|.|..|*/*)
+    echo "RPM_NAME must be a file name without path components: $rpm_name" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$rpm_name" != *.rpm ]]; then
+  echo "RPM_NAME must end with .rpm: $rpm_name" >&2
+  exit 2
+fi
+
+input_container_dir="/scan-input"
+input_rpm="$input_container_dir/$rpm_name"
+
+if [[ ! -s "$input_rpm" ]]; then
+  echo "RPM input does not exist: $input_rpm" >&2
+  exit 2
+fi
+
+mkdir -p "$output_dir"
+
+rpm_sha256=$(sha256sum "$input_rpm" | awk '{print $1}')
+rpm_size=$(stat --format='%s' "$input_rpm")
+scanner_version=$(cve-bin-tool --version)
+started_at=$(date --iso-8601=seconds)
+update_mode=${CVE_UPDATE_MODE:-never}
+if [[ "$update_mode" != "never" ]]; then
+  echo "CVE_UPDATE_MODE 必须为 never：漏洞库的更新请使用 update-cve-db（避免并发写库）" >&2
+  exit 2
+fi
+output_base="$output_dir/scan-results"
+scan_log="$output_dir/scan.log"
+
+query_format='%{NAME}\n%{EPOCHNUM}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{SOURCERPM}\n'
+mapfile -t rpm_fields < <(rpm -qp --queryformat "$query_format" "$input_rpm" 2>/dev/null)
+if [[ ${#rpm_fields[@]} -lt 6 ]]; then
+  echo "Unable to read RPM metadata: $input_rpm" >&2
+  exit 2
+fi
+
+# 扫描期间持共享锁：多个扫描可并行，但会与 update-cve-db 的排他锁互斥，
+# 保证"更新库"与"读库"不会同时发生。
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$cache_dir"
+exec 8>"$cache_dir/.cve-db.lock"
+flock --shared 8
+
+set +e
+cve-bin-tool \
+  --update "$update_mode" \
+  --detailed \
+  --format csv,json,html \
+  --output-file "$output_base" \
+  "$input_rpm" 2>&1 | tee "$scan_log"
+scanner_exit=${PIPESTATUS[0]}
+set -e
+
+finished_at=$(date --iso-8601=seconds)
+
+RPM_SCAN_NAME=${rpm_fields[0]} \
+RPM_SCAN_EPOCH=${rpm_fields[1]} \
+RPM_SCAN_VERSION=${rpm_fields[2]} \
+RPM_SCAN_RELEASE=${rpm_fields[3]} \
+RPM_SCAN_ARCH=${rpm_fields[4]} \
+RPM_SCAN_SOURCE_RPM=${rpm_fields[5]} \
+RPM_SCAN_FILENAME=$rpm_name \
+RPM_SCAN_SHA256=$rpm_sha256 \
+RPM_SCAN_SIZE=$rpm_size \
+RPM_SCAN_SCANNER_VERSION=$scanner_version \
+RPM_SCAN_STARTED_AT=$started_at \
+RPM_SCAN_FINISHED_AT=$finished_at \
+RPM_SCAN_EXIT_CODE=$scanner_exit \
+RPM_SCAN_UPDATE_MODE=$update_mode \
+RPM_SCAN_OUTPUT_DIR=$output_dir \
+python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+output_dir = Path(os.environ["RPM_SCAN_OUTPUT_DIR"])
+manifest = {
+    "schema_version": 1,
+    "scan_type": "rpm",
+    "rpm": {
+        "filename": os.environ["RPM_SCAN_FILENAME"],
+        "name": os.environ["RPM_SCAN_NAME"],
+        "epoch": os.environ["RPM_SCAN_EPOCH"],
+        "version": os.environ["RPM_SCAN_VERSION"],
+        "release": os.environ["RPM_SCAN_RELEASE"],
+        "architecture": os.environ["RPM_SCAN_ARCH"],
+        "source_rpm": os.environ["RPM_SCAN_SOURCE_RPM"],
+        "sha256": os.environ["RPM_SCAN_SHA256"],
+        "size_bytes": int(os.environ["RPM_SCAN_SIZE"]),
+    },
+    "scanner": {
+        "name": "cve-bin-tool",
+        "version": os.environ["RPM_SCAN_SCANNER_VERSION"],
+        "exit_code": int(os.environ["RPM_SCAN_EXIT_CODE"]),
+        "args": [
+            "--update", os.environ["RPM_SCAN_UPDATE_MODE"],
+            "--detailed",
+            "--format", "csv,json,html",
+        ],
+    },
+    "started_at": os.environ["RPM_SCAN_STARTED_AT"],
+    "finished_at": os.environ["RPM_SCAN_FINISHED_AT"],
+}
+(output_dir / "scan-manifest.json").write_text(
+    json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+    encoding="utf-8",
+)
+PY
+
+if [[ $scanner_exit -gt 1 ]]; then
+  echo "cve-bin-tool failed with exit code $scanner_exit" >&2
+  exit "$scanner_exit"
+fi
+
+for report in scan-results.json scan-results.csv scan-results.html; do
+  if [[ ! -s "$output_dir/$report" ]]; then
+    echo "Expected report is missing: $output_dir/$report" >&2
+    exit 3
+  fi
+done
+
+python3 - "$output_dir/scan-results.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+if not isinstance(document, list):
+    raise SystemExit("cve-bin-tool JSON report must contain a list")
+PY
+
+echo "RPM scan completed; cve-bin-tool exit code: $scanner_exit"

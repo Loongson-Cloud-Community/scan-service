@@ -1,0 +1,54 @@
+#!/usr/bin/python3
+"""RPM event fields; transport and recovery use the shared client."""
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+import sys
+
+from scan_agent_events.delivery import deliver_event
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("event", choices=("started", "completed", "failed", "replay"))
+    parser.add_argument("--scan-key")
+    parser.add_argument("--rpm-name")
+    parser.add_argument("--rpm-sha256")
+    parser.add_argument("--event-time")
+    parser.add_argument("--cbt-exit-code", type=int)
+    args = parser.parse_args()
+    if args.event != "replay":
+        for name in ("scan_key", "rpm_name", "rpm_sha256"):
+            if getattr(args, name) is None:
+                parser.error(f"--{name.replace('_', '-')} is required")
+    return args
+
+
+def event_body(args):
+    event_time = args.event_time or datetime.now(timezone.utc).isoformat()
+    payload = {
+        "event": args.event,
+        "scan_key": args.scan_key,
+        "jenkins_build_number": int(os.environ["BUILD_NUMBER"]),
+        "jenkins_job_full_name": os.environ["JOB_NAME"],
+        "rpm_name": args.rpm_name,
+        "rpm_sha256": args.rpm_sha256,
+    }
+    payload["created_at" if args.event == "started" else "finished_at"] = event_time
+    if args.cbt_exit_code is not None:
+        payload["cbt_exit_code"] = args.cbt_exit_code
+
+    return json.dumps(payload).encode("utf-8")
+
+
+def main():
+    args = parse_args()
+    if args.event == "replay":
+        return deliver_event("rpm")
+    return deliver_event("rpm", lambda: event_body(args))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

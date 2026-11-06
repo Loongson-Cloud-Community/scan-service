@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p><a href="/srpm">← All SRPM scans</a></p>
+<div class="page-heading">
+  <div>
+    <h1>SRPM Scan Task #{{ task.id }}</h1>
+    <p class="muted">{{ details.srpm_name or "Unknown label" }}</p>
+  </div>
+  <span class="status status-{{ task.scan_result|lower }}">{{ task.scan_result }}</span>
+</div>
+
+<nav class="tabs">
+  <a href="#details">Details</a>
+  <a href="#results">Results</a>
+  <a href="#logs">Logs</a>
+</nav>
+
+<section id="details" class="card">
+  <h2>Details</h2>
+  <table class="details-table">
+    <tbody>
+      <tr><th>ID</th><td>{{ task.id }}</td></tr>
+      <tr><th>Label</th><td>{{ details.srpm_name or "—" }}</td></tr>
+      <tr><th>Method</th><td>{{ details.method or "—" }}</td></tr>
+      <tr><th>Args</th><td>{% for arg in details.args %}{% if not loop.first %}<br>{% endif %}{% if arg.name %}<strong class="arg-name">{{ arg.name }}:</strong> {% endif %}<span class="arg-value">{{ arg.value }}</span>{% else %}—{% endfor %}</td></tr>
+      <tr><th>State</th><td>{{ task.scan_result }}</td></tr>
+      <tr><th>Triggered by</th><td>{{ task.triggered_by or "—" }}</td></tr>
+      <tr><th>Created</th><td>{{ task.created_at|timestamp }}</td></tr>
+      <tr><th>Finished</th><td>{{ task.finished_at|timestamp }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="results" class="card">
+  <h2>Results</h2>
+  <p class="summary-number">{{ task.total_findings if task.total_findings is not none else "—" }} <small>findings</small></p>
+  <h3>Summary</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Checker</th><th>Issue type</th><th>Count</th></tr></thead>
+    <tbody>
+    {% for row in task.summaries %}
+      <tr><td>{{ row.checker }}</td><td>{{ row.issue_type }}</td><td>{{ row.count }}</td></tr>
+    {% else %}
+      <tr><td colspan="3" class="empty">No summary data.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+</section>
+
+<section id="logs" class="card">
+  <h2>Logs</h2>
+  <ul class="logs-list">
+    {% for row in task.artifacts %}
+      <li>
+        <a class="download-link" href="/api/v1/srpm/tasks/{{ task.id }}/artifacts/{{ row.id }}/download">[download]</a>
+        <a href="/api/v1/srpm/tasks/{{ task.id }}/artifacts/{{ row.id }}/view">{{ row.name }}</a>
+      </li>
+    {% else %}
+      <li class="empty">No logs or artifacts indexed.</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

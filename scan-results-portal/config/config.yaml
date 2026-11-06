@@ -1,0 +1,21 @@
+jenkins:
+  base_url: ""
+
+sync:
+  # 每批补偿同步的上限；按最久未尝试优先，不按最新构建号截断。
+  recent_build_limit: 20
+  request_timeout_seconds: 15
+
+artifacts:
+  max_parse_bytes: 16777216
+  max_download_bytes: 1073741824
+  max_archive_bytes: 134217728
+  max_archive_members: 4096
+  max_archive_member_bytes: 67108864
+  max_archive_uncompressed_bytes: 536870912
+  max_archive_compression_ratio: 200
+
+ui:
+  title: Scan Results Portal
+  page_size: 50
+  timezone: Asia/Shanghai

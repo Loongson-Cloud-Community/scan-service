@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p><a href="/rpm">← All RPM scans</a></p>
+<div class="page-heading">
+  <div>
+    <h1>RPM Scan Task #{{ task.id }}</h1>
+    <p class="muted">{{ task.rpm_name }}</p>
+  </div>
+  <span class="status status-{{ task.state|lower }}">{{ task.state }}</span>
+</div>
+
+<nav class="tabs">
+  <a href="#details">Details</a><a href="#results">Results</a><a href="#logs">Logs</a>
+</nav>
+
+<section id="details" class="card">
+  <h2>Details</h2>
+  <table class="details-table"><tbody>
+    <tr><th>ID</th><td>{{ task.id }}</td></tr>
+    <tr><th>Label</th><td>{{ task.rpm_name }}</td></tr>
+    <tr><th>Name</th><td>{{ task.name or "—" }}</td></tr>
+    <tr><th>Epoch</th><td>{{ task.epoch or "—" }}</td></tr>
+    <tr><th>Version</th><td>{{ task.version or "—" }}</td></tr>
+    <tr><th>Release</th><td>{{ task.release or "—" }}</td></tr>
+    <tr><th>Architecture</th><td>{{ task.architecture or "—" }}</td></tr>
+    <tr><th>Source RPM</th><td>{{ task.source_rpm or "—" }}</td></tr>
+    <tr><th>Method</th><td>{{ task.scanner or "cve-bin-tool" }}{% if task.scanner_version %} {{ task.scanner_version }}{% endif %}</td></tr>
+    <tr><th>Args</th><td>{{ task.scanner_args|join(" ") if task.scanner_args else "—" }}</td></tr>
+    <tr><th>State</th><td>{{ task.state }}</td></tr>
+    <tr><th>Triggered by</th><td>{{ task.triggered_by or "—" }}</td></tr>
+    <tr><th>Created</th><td>{{ task.created_at|timestamp }}</td></tr>
+    <tr><th>Finished</th><td>{{ task.finished_at|timestamp }}</td></tr>
+  </tbody></table>
+</section>
+
+<section id="results" class="card">
+  <h2>Results</h2>
+  <p class="summary-number">{{ task.total_vulnerabilities if task.total_vulnerabilities is not none else "—" }} <small>unique CVEs</small></p>
+  <div class="severity-summary-wrap">
+    <table class="severity-summary">
+      <tbody>
+        <tr>
+          <th class="severity-critical">Critical</th>
+          <td>{{ task.critical_count }}</td>
+          <th class="severity-high">High</th>
+          <td>{{ task.high_count }}</td>
+          <th class="severity-medium">Medium</th>
+          <td>{{ task.medium_count }}</td>
+          <th class="severity-low">Low</th>
+          <td>{{ task.low_count }}</td>
+          <th class="severity-unknown">Unknown</th>
+          <td>{{ task.unknown_count }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <h3>Components</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Vendor</th><th>Product</th><th>Version</th><th>CVEs</th></tr></thead>
+    <tbody>{% for row in components %}<tr><td>{{ row.vendor }}</td><td>{{ row.product }}</td><td>{{ row.version }}</td><td>{{ row.vulnerability_count }}</td></tr>{% else %}<tr><td colspan="4" class="empty">{{ "No component data on this page." if component_total else "No component data." }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% if component_total %}
+  <nav class="pagination" aria-label="Component pages">
+    {% if component_page > 1 %}<a href="?component_page={{ [component_page - 1, component_pages]|min }}&amp;vulnerability_page={{ vulnerability_page }}#results">Previous</a>{% endif %}
+    <span>{{ component_total }} component records · Page {{ component_page }}</span>
+    {% if component_page * page_size < component_total %}<a href="?component_page={{ component_page + 1 }}&amp;vulnerability_page={{ vulnerability_page }}#results">Next</a>{% endif %}
+  </nav>
+  {% endif %}
+  <h3>Vulnerabilities</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>CVE</th><th>Severity</th><th>Score</th><th>Component</th><th>Source</th><th>Evidence</th></tr></thead>
+    <tbody>
+    {% for row in vulnerabilities %}
+      <tr>
+        <td>{{ row.cve_number }}</td>
+        <td>{{ row.severity }}</td>
+        <td>{{ row.score if row.score is not none else "—" }}</td>
+        <td>{{ row.vendor }}.{{ row.product }} {{ row.version }}</td>
+        <td>{{ row.source or "—" }}</td>
+        <td><button type="button" class="evidence-toggle" aria-expanded="false" aria-controls="evidence-{{ row.id }}">View</button></td>
+      </tr>
+      <tr class="evidence-row" id="evidence-{{ row.id }}" hidden>
+        <td colspan="6">{% if row.description %}<p>{{ row.description }}</p>{% endif %}<p>{{ row.paths or "No path data" }}</p>{% if row.cvss_vector %}<p>{{ row.cvss_vector }}</p>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="empty">{{ "No vulnerabilities on this page." if vulnerability_total else "No vulnerabilities found." }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% if vulnerability_total %}
+  <nav class="pagination" aria-label="Vulnerability pages">
+    {% if vulnerability_page > 1 %}<a href="?component_page={{ component_page }}&amp;vulnerability_page={{ [vulnerability_page - 1, vulnerability_pages]|min }}#results">Previous</a>{% endif %}
+    <span>{{ vulnerability_total }} vulnerability records · Page {{ vulnerability_page }}</span>
+    {% if vulnerability_page * page_size < vulnerability_total %}<a href="?component_page={{ component_page }}&amp;vulnerability_page={{ vulnerability_page + 1 }}#results">Next</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+
+<section id="logs" class="card">
+  <h2>Logs</h2>
+  <ul class="logs-list">
+  {% for row in task.artifacts %}
+    <li><a class="download-link" href="/api/v1/rpm/tasks/{{ task.id }}/artifacts/{{ row.id }}/download">[download]</a> <a href="/api/v1/rpm/tasks/{{ task.id }}/artifacts/{{ row.id }}/view">{{ row.name }}</a></li>
+  {% else %}<li class="empty">No logs or artifacts indexed.</li>{% endfor %}
+  </ul>
+</section>
+
+<script>
+document.querySelectorAll(".evidence-toggle").forEach(function (button) {
+  button.addEventListener("click", function () {
+    const row = document.getElementById(button.getAttribute("aria-controls"));
+    if (!row) return;
+    const expand = row.hasAttribute("hidden");
+    if (expand) {
+      row.removeAttribute("hidden");
+    } else {
+      row.setAttribute("hidden", "");
+    }
+    button.setAttribute("aria-expanded", expand ? "true" : "false");
+    button.textContent = expand ? "Hide" : "View";
+  });
+});
+</script>
+{% endblock %}

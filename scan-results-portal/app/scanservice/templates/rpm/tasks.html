@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-heading">
+  <div>
+    <h1>RPM Scan Tasks</h1>
+    <p class="muted">{{ total }} task(s)</p>
+  </div>
+</div>
+
+<form class="filters" method="get">
+  <input name="search" value="{{ search }}" placeholder="Label">
+  <select name="state">
+    <option value="">All states</option>
+    {% for value in ["RUNNING", "FINISHED", "FAILED", "NOT_AVAILABLE"] %}
+    <option value="{{ value }}" {% if state == value %}selected{% endif %}>{{ value }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Search</button>
+</form>
+
+<div class="table-wrap">
+<table class="tasks-table">
+  <thead>
+    <tr>
+      <th>ID</th><th>Method</th><th>Label</th><th>State</th>
+      <th>CVEs</th><th>Severity</th><th>Created</th><th>Finished</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for task in tasks %}
+    <tr>
+      <td><a href="/rpm/{{ task.id }}">{{ task.id }}</a></td>
+      <td>{{ task.scanner or "cve-bin-tool" }}</td>
+      <td>{{ task.rpm_name }}</td>
+      <td><span class="status status-{{ task.state|lower }}">{{ task.state }}</span></td>
+      <td>{{ task.total_vulnerabilities if task.total_vulnerabilities is not none else "—" }}</td>
+      <td>
+        {% if task.total_vulnerabilities is not none %}
+        {{ task.critical_count }}C / {{ task.high_count }}H / {{ task.medium_count }}M / {{ task.low_count }}L
+        {% else %}—{% endif %}
+      </td>
+      <td>{{ task.created_at|timestamp }}</td>
+      <td>{{ task.finished_at|timestamp }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="empty">No tasks found.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if total > page_size %}
+<div class="pagination">
+  {% if page > 1 %}<a href="?page={{ page - 1 }}&search={{ search }}&state={{ state }}">Previous</a>{% endif %}
+  <span>Page {{ page }}</span>
+  {% if page * page_size < total %}<a href="?page={{ page + 1 }}&search={{ search }}&state={{ state }}">Next</a>{% endif %}
+</div>
+{% endif %}
+
+{% endblock %}
