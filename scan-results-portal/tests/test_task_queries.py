@@ -1,6 +1,7 @@
 """Public reads must load only the data their response actually uses."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -220,6 +221,8 @@ def test_web_list_preserves_visible_fields_without_reading_results(portal):
     assert response.status_code == 200
     assert "demo." in response.text
     assert "FINISHED" in response.text
+    assert "2026-11-06 18:00:00" in response.text
+    assert "2026-11-06 10:00:00" not in response.text
     assert ("custom-csmock" if portal.kind == "srpm" else "cve-bin-tool") in response.text
     assert len(portal.statements) == 2
     assert_not_read(portal, "scan_artifact", "scan_component", "scan_vulnerability", "scan_summary",
@@ -229,6 +232,8 @@ def test_web_list_preserves_visible_fields_without_reading_results(portal):
 def test_web_detail_loads_only_visible_result_data(portal):
     response = get(portal, f"/{portal.kind}/{portal.id}")
     assert response.status_code == 200
+    assert "2026-11-06 18:00:00" in response.text
+    assert "2026-11-06 10:00:00" not in response.text
     for text in ("Details", "Results", "Logs", "demo.", "test-user", "scan.log", "[download]"):
         assert text in response.text
     if portal.kind == "srpm":
@@ -279,3 +284,23 @@ def test_missing_srpm_results_preserve_404(portal, endpoint):
     response = get(portal, f"/api/v1/srpm/tasks/999999/{endpoint}")
     assert response.status_code == 404
     assert len(portal.statements) == 1
+
+
+@pytest.mark.parametrize("zone,expected", [
+    ("Asia/Shanghai", "2026-11-06 18:00:00"),
+    ("UTC", "2026-11-06 10:00:00"),
+    ("America/New_York", "2026-11-06 05:00:00"),
+])
+@pytest.mark.parametrize("detail", [False, True])
+def test_page_timezone_uses_request_settings_without_changing_api_times(
+    portal, settings, monkeypatch, zone, expected, detail,
+):
+    web = rpm_web if portal.kind == "rpm" else srpm_web
+    monkeypatch.setattr(web, "get_settings", lambda: replace(settings, timezone=zone))
+    path = f"/{portal.kind}/{portal.id}" if detail else f"/{portal.kind}"
+    response = get(portal, path)
+    assert response.status_code == 200
+    assert response.text.count(expected) >= 2  # Created and Finished.
+    response = get(portal, f"/api/v1/{portal.kind}/tasks/{portal.id}")
+    assert response.status_code == 200
+    assert response.json() == portal.expected

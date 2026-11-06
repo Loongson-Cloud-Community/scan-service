@@ -18,4 +18,5 @@ artifacts:
 ui:
   title: Scan Results Portal
   page_size: 50
+  # 仅控制页面显示时区，不改变数据库时间或 Agent 上报时间。
   timezone: Asia/Shanghai

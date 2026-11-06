@@ -1,8 +1,7 @@
-"""Task display formatting and public payloads; database reads live in task_queries."""
+"""SRPM detail values and public payloads; database reads live in task_queries."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from ..models import SrpmScanTask
@@ -37,12 +36,6 @@ TASK_PAYLOAD_FIELDS = (
     "last_synced_at",
     "sync_status",
 )
-
-
-def format_timestamp(value: datetime | None) -> str:
-    if value is None:
-        return "—"
-    return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def scan_method(task: SrpmScanTask) -> str:

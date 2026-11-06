@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -63,6 +64,13 @@ class Settings:
     title: str
     page_size: int
     artifact_limits: ArtifactLimits = field(default_factory=ArtifactLimits)
+    timezone: str = "Asia/Shanghai"
+
+    def __post_init__(self) -> None:
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"ui.timezone is not a valid IANA time zone: {self.timezone!r}") from exc
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -145,6 +153,7 @@ class Settings:
             title=str(_env_or(ui, "title", "SCAN_SERVICE_TITLE", "Scan Results Portal")),
             page_size=int(ui.get("page_size", 50)),
             artifact_limits=artifact_limits,
+            timezone=str(ui.get("timezone", "Asia/Shanghai")),
         )
 
 

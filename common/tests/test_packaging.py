@@ -49,8 +49,8 @@ class SharedClientTests(unittest.TestCase):
                 self.assertFalse((context / name).exists())
         # The classic builder can retain an empty parent for its Dockerfile,
         # even though the Dockerfile and every test source are excluded.
-        self.assertFalse(any((context / "agent-common/tests").rglob("*")))
-        for name in ("agent-common/install.py", "agent-common/scan_agent_events/delivery.py",
+        self.assertFalse(any((context / "common/tests").rglob("*")))
+        for name in ("common/install.py", "common/scan_agent_events/delivery.py",
                      "rpm-scan-agent/scripts/send-rpm-event",
                      "rpm-scan-agent/libexec/rpm-scan-agent/scan",
                      "srpm-scan-agent/scripts/send-srpm-event"):

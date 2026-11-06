@@ -1,12 +1,11 @@
 FROM lcr.loongnix.cn/loongnix-server/loongnix-server:23.3
 RUN sed -i '/\[updates\]/,/enabled=/ s/enabled=1/enabled=0/' /etc/yum.repos.d/Loongnix-Server.repo
-RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
 ARG CVE_BIN_TOOL_RELEASE=20261106
 ARG CVE_BIN_TOOL_ARCHIVE=cve-bin-tool-20261106-la64-py311.tar.gz
 ARG JENKINS_AGENT_JAR_URL
 
-ENV PATH="/usr/lib/jvm/jdk-25.0.4/bin:cve-bin-tool/.venv/bin:${PATH}" \
+ENV PATH="/usr/lib/jvm/jdk-25.0.4/bin:/cve-bin-tool/.venv/bin:${PATH}" \
     HOME=/home/jenkins \
     JENKINS_AGENT_WORKDIR=/home/jenkins/agent \
     XDG_CACHE_HOME=/data/cve-db
@@ -52,9 +51,9 @@ RUN groupadd --gid ${AGENT_GID} jenkins && \
       /data/cve-db && \
     chown -R jenkins:jenkins /home/jenkins /data/cve-db
 
-COPY agent-common /tmp/agent-common
+COPY common /tmp/common
 # Event commands use the system interpreter, independent of the scanner venv.
-RUN /usr/bin/python3 /tmp/agent-common/install.py && rm -rf /tmp/agent-common
+RUN /usr/bin/python3 /tmp/common/install.py && rm -rf /tmp/common
 
 COPY rpm-scan-agent/scripts/run-rpm-scan /usr/local/bin/run-rpm-scan
 COPY rpm-scan-agent/libexec/rpm-scan-agent/scan /usr/local/libexec/rpm-scan-agent/scan

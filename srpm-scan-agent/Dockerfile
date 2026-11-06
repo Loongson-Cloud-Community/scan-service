@@ -1,6 +1,5 @@
 FROM lcr.loongnix.cn/loongnix-server/loongnix-server:23.3
 RUN sed -i '/\[updates\]/,/enabled=/ s/enabled=1/enabled=0/' /etc/yum.repos.d/Loongnix-Server.repo
-RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 
 ARG JENKINS_AGENT_JAR_URL
 
@@ -39,9 +38,9 @@ RUN groupadd --gid ${AGENT_GID} jenkins && \
     mkdir -p /home/jenkins/agent && \
     chown -R jenkins:jenkins /home/jenkins
 
-COPY agent-common /tmp/agent-common
+COPY common /tmp/common
 # Event commands use the system interpreter, independent of the scanner venv.
-RUN /usr/bin/python3 /tmp/agent-common/install.py && rm -rf /tmp/agent-common
+RUN /usr/bin/python3 /tmp/common/install.py && rm -rf /tmp/common
 
 COPY srpm-scan-agent/scripts/run-srpm-scan /usr/local/bin/run-srpm-scan
 COPY srpm-scan-agent/scripts/send-srpm-event /usr/local/bin/send-srpm-event

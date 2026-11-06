@@ -5,16 +5,16 @@ from sqlalchemy.orm import Session
 
 from ....config import get_settings
 from ....db import get_db
+from ....time_display import timestamp_filter
 from ..services.task_queries import (
     get_task_detail, list_task_components_page, list_task_vulnerabilities_page,
     list_task_web_page,
 )
-from ..services.task_service import format_timestamp
 
 
 router = APIRouter(tags=["rpm-web"])
 templates = Jinja2Templates(directory="/app/scanservice/templates")
-templates.env.filters["timestamp"] = format_timestamp
+templates.env.filters["timestamp"] = timestamp_filter
 
 
 @router.get("/rpm", response_class=HTMLResponse)
@@ -32,6 +32,7 @@ def tasks_page(
         {
             "request": request,
             "title": settings.title,
+            "display_timezone": settings.timezone,
             "tasks": tasks,
             "total": total,
             "page": page,
@@ -62,6 +63,7 @@ def task_page(
         {
             "request": request,
             "title": settings.title,
+            "display_timezone": settings.timezone,
             "task": task,
             "components": components,
             "vulnerabilities": vulnerabilities,

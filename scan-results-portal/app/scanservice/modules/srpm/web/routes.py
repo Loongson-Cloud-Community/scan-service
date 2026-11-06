@@ -5,17 +5,17 @@ from sqlalchemy.orm import Session
 
 from ....config import get_settings
 from ....db import get_db
+from ....time_display import timestamp_filter
 from ..services.task_queries import get_task_detail, list_task_web_page
 from ..services.task_service import (
     detail_values,
-    format_timestamp,
     scan_method,
 )
 
 
 router = APIRouter(tags=["srpm-web"])
 templates = Jinja2Templates(directory="/app/scanservice/templates")
-templates.env.filters["timestamp"] = format_timestamp
+templates.env.filters["timestamp"] = timestamp_filter
 templates.env.filters["scan_method"] = scan_method
 
 
@@ -34,6 +34,7 @@ def tasks_page(
         {
             "request": request,
             "title": settings.title,
+            "display_timezone": settings.timezone,
             "tasks": rows,
             "total": total,
             "page": page,
@@ -55,6 +56,7 @@ def task_page(
         {
             "request": request,
             "title": settings.title,
+            "display_timezone": settings.timezone,
             "task": task,
             "details": detail_values(task),
         },
