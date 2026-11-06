@@ -1,0 +1,27 @@
+# Agent builds use the stack root to include their shared client.
+# Allow only image inputs: never send .env, data volumes, Portal or Git metadata.
+**
+!agent-common/
+agent-common/**
+!agent-common/install.py
+!agent-common/scan_agent_events/
+!agent-common/scan_agent_events/**
+!rpm-scan-agent/
+rpm-scan-agent/**
+!rpm-scan-agent/Dockerfile
+!rpm-scan-agent/scripts/
+!rpm-scan-agent/scripts/**
+!rpm-scan-agent/libexec/
+!rpm-scan-agent/libexec/**
+!srpm-scan-agent/
+srpm-scan-agent/**
+!srpm-scan-agent/Dockerfile
+!srpm-scan-agent/scripts/
+!srpm-scan-agent/scripts/**
+# Even inside an allowed source directory, these are not image inputs.
+**/.git
+**/.git/**
+**/.env
+**/.env.*
+**/__pycache__
+**/*.pyc

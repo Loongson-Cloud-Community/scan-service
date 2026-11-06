@@ -80,7 +80,9 @@ services:
     image: rpm-scan-agent:latest
     container_name: rpm-scan-agent
     build:
-      context: ./rpm-scan-agent
+      # Include the single shared event client; root .dockerignore is allowlisted.
+      context: .
+      dockerfile: rpm-scan-agent/Dockerfile
       args:
         AGENT_UID: ${AGENT_UID:?AGENT_UID must be set in .env}
         AGENT_GID: ${AGENT_GID:?AGENT_GID must be set in .env}
@@ -142,7 +144,8 @@ services:
     image: srpm-scan-agent:latest
     container_name: srpm-scan-agent
     build:
-      context: ./srpm-scan-agent
+      context: .
+      dockerfile: srpm-scan-agent/Dockerfile
       args:
         AGENT_UID: ${AGENT_UID:?AGENT_UID must be set in .env}
         AGENT_GID: ${AGENT_GID:?AGENT_GID must be set in .env}
