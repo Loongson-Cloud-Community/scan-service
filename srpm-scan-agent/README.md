@@ -1,62 +1,45 @@
 # SRPM Scan Agent
 
-LoongArch64 Jenkins inbound agent，用 `csmock` 扫描源码包（SRPM）。
+Jenkins 入站 Agent，调用一次性 csmock 容器扫描源码包。
+部署入口见[根目录 README](../README.md)。
 
-本组件是 `scan-service` 扫描服务栈的一部分：镜像构建、容器启动与运行时配置
-由上级目录的 `docker-compose.yml` 与 `.env` 统一管理。
+## 配置与持久化
 
-持久化（路径来自 `scan-service/.env` 的「宿主机目录」分区）：
+以下参数填写在根目录 `.env`，示例见 [.env.example](../.env.example)。
 
-~~~text
-SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH    agent 工作目录，挂到容器 /home/jenkins/agent
-SRPM_SCAN_INPUT_HOST_PATH              待扫描 SRPM，只读挂到容器 /scan-input
-~~~
-
-## 设计：调度型 agent + 一次性扫描容器
-
-csmock 会在 mock 里构建源码包，需要 `SYS_ADMIN`。因此本 agent 自己**不含**
-csmock/mock，而是：
-
-1. 作为 Jenkins inbound agent 接收构建；
-2. 通过挂进来的 `/var/run/docker.sock` 调起一个**一次性 csmock 容器**完成扫描；
-3. 扫描产物落到宿主工作目录（与 agent 挂载一致），容器用完即删；
-4. 由 pipeline 把产物归档到 Jenkins、把事件上报给门户。
-
-这样特权只给真正跑 mock 的那个短命容器，agent 本身保持精简。
-
-## 并发模型
-
-本组件**不挂载 mock 缓存目录**，每个一次性容器在自己的文件系统里初始化
-chroot，`buildroot.lock` 各自独立，因此**多个 SRPM 扫描可以并行**。
-
-代价：
-
-- **每次扫描都要初始化 chroot**：下载并安装整套构建环境；
-- 容器**不保留**构建缓存，唯一痕迹是落到宿主工作目录的 `.tar.xz`。
-
-## 配置
-
-运行时配置位于 `scan-service/.env` 的 `srpm-scan-agent` 分区，由 compose 注入容器：
-
-| 键 | 说明 |
+| 参数 | 说明 |
 | --- | --- |
-| `SRPM_SCAN_AGENT_NAME` / `SRPM_SCAN_AGENT_SECRET` | Jenkins permanent agent 名称与 inbound secret |
-| `CSMOCK_IMAGE` | 一次性扫描用的 csmock 镜像 |
-| `MOCK_CONFIG` | mock 配置，默认 `loongnix-server-23-loongarch64` |
-| `CSMOCK_TOOLS` | 启用的检查器，默认 `cppcheck,clang,gcc,shellcheck` |
-| `DOCKER_GID` | 宿主 `docker.sock` 的属组 gid |
+| `AGENT_UID` / `AGENT_GID` | 构建镜像时创建 Agent 用户的 UID/GID，与宿主工作目录权限匹配 |
+| `JENKINS_URL` | Agent 连接 Jenkins 的地址 |
+| `JENKINS_AGENT_JAR_URL` | 构建镜像时下载 agent.jar 的地址 |
+| `SRPM_SCAN_AGENT_NAME` / `SRPM_SCAN_AGENT_SECRET` | Jenkins 入站节点名称及对应 Secret |
+| `SCAN_RESULTS_PORTAL_URL` | 事件回传地址，默认 `http://scan-results-portal:8080` |
+| `CSMOCK_IMAGE` | 扫描使用的 csmock 镜像 |
+| `MOCK_CONFIG` | mock 配置名称，默认 `loongnix-server-23-loongarch64` |
+| `CSMOCK_TOOLS` | 逗号分隔的检查器，默认 `cppcheck,clang,gcc,shellcheck` |
+| `DOCKER_GID` | 宿主机 `docker.sock` 的属组 GID，供 Agent 访问 Docker |
+| `SRPM_SCAN_INPUT_HOST_PATH` | 待扫描包目录，只读挂载到 `/scan-input` |
+| `SRPM_SCAN_AGENT_WORKSPACE_HOST_PATH` | Agent 工作区与扫描输出，挂载到 `/home/jenkins/agent` |
 
-## 启动
+工作目录应允许 `AGENT_UID:AGENT_GID` 读写；输入目录只需可读、可遍历。
 
-在 `scan-service` 目录执行：
+## Jenkins 接入
 
-~~~bash
-docker compose up -d --build srpm-scan-agent
-~~~
+在 Jenkins 中创建与 `SRPM_SCAN_AGENT_NAME` 同名的入站节点，将 Secret 填入配置，Pipeline 选择该节点执行。
+Agent 提供以下命令：
 
-## Jenkins 侧
+| 命令 | 用途与参数 |
+| --- | --- |
+| `run-srpm-scan SRPM_NAME [OUTPUT_DIR]` | 扫描 `/scan-input` 下的单个 `.src.rpm`；包名不含目录，输出目录默认 `srpm-scan-artifacts`，须位于 Agent 工作目录内 |
+| `run-srpm-scan --dry-run SRPM_NAME [OUTPUT_DIR]` | 仅打印扫描容器命令，不执行扫描 |
+| `send-srpm-event started\|completed\|failed` | 上报扫描状态；必填 `--srpm-name`；可选 `--event-time`、`--csmock-exit-code` |
+| `send-srpm-event replay` | 补发尚未确认的通知，不需要包名或当前构建参数 |
 
-在 Jenkins 上创建 permanent agent srpm-scan-agent-01，标签为 srpm-scan， 并把其 inbound-agent secret 写入 scan-service/.env 的 `SRPM_SCAN_AGENT_SECRET`。
+通知命令使用 Jenkins 提供的 `JOB_NAME`、`BUILD_NUMBER`。在 Pipeline 中通过凭据绑定
+提供 `SCAN_SERVICE_INGEST_TOKEN`，其值与门户配置一致；`SCAN_RESULTS_PORTAL_URL`
+已由容器配置提供。
 
-Pipeline 参数 `SRPM_NAME` 只填写完整 SRPM 文件名，不包含目录；`run-srpm-scan`
-会在只读挂载目录 `/scan-input` 下解析该文件。
+接入顺序为：发送 `started` → 扫描 → 用 Jenkins `archiveArtifacts` 归档 → 发送
+`completed`；扫描执行失败则发送 `failed`。通知失败可用 `replay` 补发。
+产物目录使用 `srpm-scan-artifacts/<构建号>/`，完整接入约定见
+[Jenkins 接入说明](../scan-results-portal/docs/jenkins-integration.md)。

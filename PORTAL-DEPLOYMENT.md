@@ -1,65 +1,38 @@
 # Portal 部署入口约定
 
-本文说明当前测试阶段的 HTTP 部署方式，以及进入生产环境后 Scan Results Portal
-与公网出口之间的接口边界。
+这是为后续接入统一公网入口预留的临时约定文件。
+当前测试使用 HTTP；生产环境由企业入口提供域名和 HTTPS，不在本项目单独部署 TLS 网关。
 
-## 当前测试环境
+## 当前内网测试
 
-`docker-compose.yml` 将 Portal 容器的 `8080` 端口直接发布到宿主机：
+通过宿主机访问 `/srpm`、`/rpm`，默认地址为 `http://<宿主机内网 IP>:8081`。
+监听地址和端口由 `.env` 中的 `PORTAL_BIND_ADDRESS`、`PORTAL_HTTP_PORT` 配置，
+默认 `0.0.0.0:8081` 仅适用于受控内网。
 
-~~~text
-http://${PORTAL_BIND_ADDRESS}:${PORTAL_HTTP_PORT}
-~~~
+Agent 使用栈内地址 `http://scan-results-portal:8080` 通知门户，不经过公网入口。
 
-示例配置默认是 `0.0.0.0:8081`，便于受控内网中的浏览器和 Jenkins 测试访问。
+## 接入企业统一入口
 
-测试地址示例：
+- 将企业入口的请求转发到门户宿主机的内网 HTTP 地址；门户按域名根路径部署，不额外挂载路径前缀。
+- 将 `PORTAL_BIND_ADDRESS` 改为宿主机私网地址，并用防火墙限制端口，仅允许入口节点及必要的内网维护访问。
+- 对报告查看和下载关闭响应缓冲，预留足够的传输超时，并限制单一来源的请求速率和并发数。
+- 就绪检查使用 `/readyz`，进程存活检查使用 `/healthz`。
 
-~~~text
-http://10.130.43.224:8081/srpm
-http://10.130.43.224:8081/rpm
-~~~
+## 公网访问边界
 
-扫描 agent 与 Portal 位于同一个 Compose 网络，仍使用
-`http://scan-results-portal:8080` 上报事件，不经过宿主机端口。
+公网只允许页面、静态资源、只读查询和产物访问，按 `GET`、`HEAD` 白名单转发。
+以下通知和维护入口不得对公网开放，即使它们本身有 Token 校验：
 
-## 生产环境
+```text
+/api/v1/rpm/events
+/api/v1/srpm/events
+/api/v1/rpm/sync
+/api/v1/srpm/sync
+```
 
-部署时应执行以下配置：
+通知入口仅供内网 Agent 使用；同步入口仅供内网维护人员使用。
 
-1. 将 `PORTAL_BIND_ADDRESS` 设置为宿主机私网地址。
-2. 仅允许公网出口节点访问 `PORTAL_HTTP_PORT`。
-3. 对产物查看和下载关闭响应缓冲，设置合理的长连接超时，并限制单来源请求速率
-   与并发连接数。
+## 切换前确认
 
-Portal upstream 的健康检查接口为：
-
-~~~text
-GET /readyz
-GET /healthz
-~~~
-
-## 对外路由边界
-
-只应向匿名用户转发页面、静态资源和只读查询/产物请求（`GET`、`HEAD`）。
-以下写接口不得作为公共路由发布：
-
-~~~text
-POST /api/v1/rpm/events
-POST /api/v1/srpm/events
-POST /api/v1/rpm/sync
-POST /api/v1/srpm/sync
-~~~
-
-其中 event 接口仅供 Compose 私网内的扫描 agent 使用；sync 接口仅供内网调用，
-并且 Portal 仍会校验独立的 `SCAN_SERVICE_OPERATOR_TOKEN`。
-
-## 切换检查
-
-接入公网出口后，确认以下条件再停止测试态直连：
-
-- Portal 域名只能通过 HTTPS 访问；
-- 外部请求无法访问 event 和 sync 接口；
-- Portal 宿主端口仅对公网出口节点和内网开放；
-- 页面、在线查看和大文件下载均可用；
-- agent 仍可通过 Compose 服务名上报事件。
+确认公网只能通过 HTTPS 访问，写入口无法从公网调用，页面、报告查看和下载均正常，
+且 Agent 仍能在内网通知门户后，再停止测试态直连。
