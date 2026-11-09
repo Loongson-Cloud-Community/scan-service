@@ -1,5 +1,7 @@
 FROM lcr.loongnix.cn/loongnix-server/loongnix-server:23.3
 RUN sed -i '/\[updates\]/,/enabled=/ s/enabled=1/enabled=0/' /etc/yum.repos.d/Loongnix-Server.repo
+# 删除无效的 RPM 宏定义，恢复 RPM 默认配置
+RUN sed -i '/^%_install_langs[[:space:]]*$/d' /etc/rpm/macros.image-language-conf
 
 ARG CVE_BIN_TOOL_RELEASE=20261106
 ARG CVE_BIN_TOOL_ARCHIVE=cve-bin-tool-20261106-la64-py311.tar.gz
@@ -56,7 +58,7 @@ COPY common /tmp/common
 RUN /usr/bin/python3 /tmp/common/install.py && rm -rf /tmp/common
 
 COPY rpm-scan-agent/scripts/run-rpm-scan /usr/local/bin/run-rpm-scan
-COPY rpm-scan-agent/libexec/rpm-scan-agent/scan /usr/local/libexec/rpm-scan-agent/scan
+COPY rpm-scan-agent/libexec/rpm-scan-agent/ /usr/local/libexec/rpm-scan-agent/
 COPY rpm-scan-agent/scripts/send-rpm-event /usr/local/bin/send-rpm-event
 COPY rpm-scan-agent/scripts/update-cve-db /usr/local/bin/update-cve-db
 COPY rpm-scan-agent/scripts/jenkins-agent-entrypoint /usr/local/bin/jenkins-agent-entrypoint

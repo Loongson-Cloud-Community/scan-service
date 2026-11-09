@@ -32,9 +32,16 @@ if mode in {"running", "ignore-term", "orphan"}:
     if mode != "orphan":
         while True:
             time.sleep(0.05)
-for extension, content in (("json", "[]"), ("csv", "vendor,product"), ("html", "<html></html>")):
+for extension, content in (("json", os.environ.get("TEST_JSON", "[]")), ("csv", "vendor,product"), ("html", "<html></html>")):
+    if extension == os.environ.get("TEST_MISSING_REPORT"):
+        continue
     Path(output + "." + extension).write_text(content)
+print(os.environ.get("TEST_LOG", ""), flush=True)
 print("scanner log", flush=True)
+if mode == "reports-written":
+    Path(os.environ["TEST_PIDS"]).write_text(json.dumps([os.getpid()]))
+    while True:
+        time.sleep(0.05)
 raise SystemExit(int(os.environ.get("TEST_EXIT", "0")))
 '''
 
@@ -152,6 +159,100 @@ class ScanProcessTests(unittest.TestCase):
         proc = self.start(TEST_EXIT="2")
         _, stderr = proc.communicate(timeout=8)
         self.assertEqual(proc.returncode, 2, stderr)
+        failure = json.loads((self.output / "scan-failure.json").read_text())
+        self.assertEqual(failure["scanner"]["exit_code"], 2)
+        self.assertFalse((self.output / "scan-manifest.json").exists())
+        self.assertFalse((self.output / "scan-results.json").exists())
+
+    def test_extraction_failure_rejects_zero_exit_and_preserves_diagnostics(self):
+        for log in (
+            "WARNING cve_bin_tool.VersionScanner - Failure extracting /scan-input/test.rpm",
+            "WARNING cve_bin_tool.VersionScanner - Failure       extractor.py:488\n"
+            "                    extracting\n                    /scan-input/test.rpm",
+            "\x1b[33mWARNING\x1b[0m cve_bin_tool.VersionScanner - \x1b[31mFailure\x1b[0m "
+            "\x1b[2mextractor.py:488\x1b[0m\n                    extracting /scan-input/test.rpm",
+        ):
+            with self.subTest(log=log), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                self.output = Path(directory) / "output"
+                proc = self.start(TEST_LOG=log)
+                stdout, stderr = proc.communicate(timeout=8)
+                self.assertEqual(proc.returncode, 3, stderr)
+                self.assertNotIn("RPM scan completed", stdout)
+                self.assertIn("Failure extracting", stderr)
+                self.assertIn("scanner log", (self.output / "scan.log").read_text())
+                failure = json.loads((self.output / "scan-failure.json").read_text())
+                self.assertEqual(failure["scanner"]["exit_code"], 0)
+                self.assertEqual(failure["validation"]["reason"], "EXTRACTION_FAILED")
+                self.assertEqual(json.loads((self.output / "unvalidated-results.json").read_text()), [])
+                for name in ("scan-manifest.json", "scan-results.json", "scan-results.csv", "scan-results.html"):
+                    self.assertFalse((self.output / name).exists(), name)
+                self.assert_lock_released()
+
+    def test_ordinary_warning_and_short_empty_scan_remain_success(self):
+        proc = self.start(TEST_LOG="WARNING cve_bin_tool - Not verifying CVE DB cache\n"
+                          "INFO cve_bin_tool.VersionScanner - Scanning /scan-input/Failure extracting.rpm\n"
+                          "Total files: 1")
+        _, stderr = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, 0, stderr)
+        self.assertEqual(json.loads((self.output / "scan-results.json").read_text()), [])
+        self.assertTrue((self.output / "scan-manifest.json").is_file())
+        self.assertFalse((self.output / "scan-failure.json").exists())
+        self.assertFalse((self.output / "unvalidated-results.json").exists())
+
+    def test_extraction_failure_also_rejects_nonempty_report_and_findings_exit(self):
+        proc = self.start(TEST_EXIT="1", TEST_JSON='[{"cve_number":"CVE-2026-0001"}]',
+                          TEST_LOG="WARNING cve_bin_tool.VersionScanner - Failure extracting nested.rpm")
+        _, stderr = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, 3, stderr)
+        failure = json.loads((self.output / "scan-failure.json").read_text())
+        self.assertEqual(failure["scanner"]["exit_code"], 1)
+        self.assertFalse((self.output / "scan-manifest.json").exists())
+
+    def test_invalid_reports_do_not_publish_a_success_manifest(self):
+        for env in ({"TEST_MISSING_REPORT": "csv"}, {"TEST_JSON": "not JSON"}, {"TEST_JSON": "{}"}):
+            with self.subTest(env=env), tempfile.TemporaryDirectory(dir=self.root) as directory:
+                self.output = Path(directory) / "output"
+                proc = self.start(**env)
+                _, stderr = proc.communicate(timeout=8)
+                self.assertEqual(proc.returncode, 3, stderr)
+                failure = json.loads((self.output / "scan-failure.json").read_text())
+                self.assertEqual(failure["scanner"]["exit_code"], 0)
+                self.assertFalse((self.output / "scan-manifest.json").exists())
+                self.assertFalse((self.output / "scan-results.json").exists())
+
+    def test_reports_are_not_published_while_scanner_is_still_running(self):
+        proc = self.start(TEST_MODE="reports-written")
+        self.wait_for(self.root / "pids.json")
+        self.assertTrue((self.output / "unvalidated-results.json").is_file())
+        self.assertFalse((self.output / "scan-results.json").exists())
+        self.assertFalse((self.output / "scan-manifest.json").exists())
+        proc.send_signal(signal.SIGTERM)
+        proc.communicate(timeout=9)
+        self.assertEqual(proc.returncode, 143)
+        self.assertFalse((self.output / "scan-manifest.json").exists())
+        self.assert_lock_released()
+
+    def test_previous_results_are_not_reused_or_overwritten(self):
+        self.output.mkdir()
+        manifest = self.output / "scan-manifest.json"
+        manifest.write_text("previous result")
+        proc = self.start(TEST_LOG="Failure extracting /scan-input/test.rpm")
+        _, stderr = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, 2, stderr)
+        self.assertEqual(manifest.read_text(), "previous result")
+        self.assertFalse((self.root / "queried").exists())
+
+    def test_log_capture_failure_cannot_hide_an_extraction_failure(self):
+        tee = self.bin / "tee"
+        tee.write_text('#!/usr/bin/env python3\nimport sys\nsys.stdin.buffer.read()\nraise SystemExit(1)\n')
+        tee.chmod(0o755)
+        proc = self.start(TEST_LOG="Failure extracting /scan-input/test.rpm")
+        _, stderr = proc.communicate(timeout=8)
+        self.assertEqual(proc.returncode, 3, stderr)
+        failure = json.loads((self.output / "scan-failure.json").read_text())
+        self.assertEqual(failure["scanner"]["exit_code"], 0)
+        self.assertEqual(failure["validation"]["reason"], "LOG_WRITE_FAILED")
+        self.assertFalse((self.output / "scan-manifest.json").exists())
 
     def test_term_stops_scanner_descendants_and_releases_lock(self):
         proc = self.start(TEST_MODE="running")

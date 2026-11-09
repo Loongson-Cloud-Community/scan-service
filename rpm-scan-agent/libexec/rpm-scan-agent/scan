@@ -32,6 +32,16 @@ fi
 
 mkdir -p "$output_dir"
 
+# Reusing earlier artifacts could make a rejected scan look successful to the
+# Portal. Refuse to overwrite this tool's outputs; unrelated files are allowed.
+for result_name in scan-manifest.json scan-manifest.json.tmp scan-failure.json \
+  scan-results.{json,csv,html} unvalidated-results.{json,csv,html}; do
+  if [[ -e "$output_dir/$result_name" || -L "$output_dir/$result_name" ]]; then
+    echo "Output directory already contains scan results: $output_dir; use a fresh directory" >&2
+    exit 2
+  fi
+done
+
 rpm_sha256=$(sha256sum "$input_rpm" | awk '{print $1}')
 rpm_size=$(stat --format='%s' "$input_rpm")
 scanner_version=$(cve-bin-tool --version)
@@ -41,7 +51,8 @@ if [[ "$update_mode" != "never" ]]; then
   echo "CVE_UPDATE_MODE 必须为 never：漏洞库的更新请使用 update-cve-db（避免并发写库）" >&2
   exit 2
 fi
-output_base="$output_dir/scan-results"
+# These names are not accepted by the Portal, even if archived after a failure.
+output_base="$output_dir/unvalidated-results"
 scan_log="$output_dir/scan.log"
 
 query_format='%{NAME}\n%{EPOCHNUM}\n%{VERSION}\n%{RELEASE}\n%{ARCH}\n%{SOURCERPM}\n'
@@ -65,7 +76,9 @@ cve-bin-tool \
   --format csv,json,html \
   --output-file "$output_base" \
   "$input_rpm" 2>&1 | tee "$scan_log"
-scanner_exit=${PIPESTATUS[0]}
+scan_status=("${PIPESTATUS[@]}")
+scanner_exit=${scan_status[0]}
+log_exit=${scan_status[1]}
 set -e
 
 finished_at=$(date --iso-8601=seconds)
@@ -83,67 +96,9 @@ RPM_SCAN_SCANNER_VERSION=$scanner_version \
 RPM_SCAN_STARTED_AT=$started_at \
 RPM_SCAN_FINISHED_AT=$finished_at \
 RPM_SCAN_EXIT_CODE=$scanner_exit \
+RPM_SCAN_LOG_EXIT_CODE=$log_exit \
 RPM_SCAN_UPDATE_MODE=$update_mode \
 RPM_SCAN_OUTPUT_DIR=$output_dir \
-python3 - <<'PY'
-import json
-import os
-from pathlib import Path
-
-output_dir = Path(os.environ["RPM_SCAN_OUTPUT_DIR"])
-manifest = {
-    "schema_version": 1,
-    "scan_type": "rpm",
-    "rpm": {
-        "filename": os.environ["RPM_SCAN_FILENAME"],
-        "name": os.environ["RPM_SCAN_NAME"],
-        "epoch": os.environ["RPM_SCAN_EPOCH"],
-        "version": os.environ["RPM_SCAN_VERSION"],
-        "release": os.environ["RPM_SCAN_RELEASE"],
-        "architecture": os.environ["RPM_SCAN_ARCH"],
-        "source_rpm": os.environ["RPM_SCAN_SOURCE_RPM"],
-        "sha256": os.environ["RPM_SCAN_SHA256"],
-        "size_bytes": int(os.environ["RPM_SCAN_SIZE"]),
-    },
-    "scanner": {
-        "name": "cve-bin-tool",
-        "version": os.environ["RPM_SCAN_SCANNER_VERSION"],
-        "exit_code": int(os.environ["RPM_SCAN_EXIT_CODE"]),
-        "args": [
-            "--update", os.environ["RPM_SCAN_UPDATE_MODE"],
-            "--detailed",
-            "--format", "csv,json,html",
-        ],
-    },
-    "started_at": os.environ["RPM_SCAN_STARTED_AT"],
-    "finished_at": os.environ["RPM_SCAN_FINISHED_AT"],
-}
-(output_dir / "scan-manifest.json").write_text(
-    json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-    encoding="utf-8",
-)
-PY
-
-if [[ $scanner_exit -gt 1 ]]; then
-  echo "cve-bin-tool failed with exit code $scanner_exit" >&2
-  exit "$scanner_exit"
-fi
-
-for report in scan-results.json scan-results.csv scan-results.html; do
-  if [[ ! -s "$output_dir/$report" ]]; then
-    echo "Expected report is missing: $output_dir/$report" >&2
-    exit 3
-  fi
-done
-
-python3 - "$output_dir/scan-results.json" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as stream:
-    document = json.load(stream)
-if not isinstance(document, list):
-    raise SystemExit("cve-bin-tool JSON report must contain a list")
-PY
+python3 "$(dirname -- "${BASH_SOURCE[0]}")/scan_results.py"
 
 echo "RPM scan completed; cve-bin-tool exit code: $scanner_exit"
