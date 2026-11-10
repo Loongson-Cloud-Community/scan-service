@@ -77,6 +77,15 @@ class CsmockArchive:
                 and {member.name for member in required} == _REQUIRED_SCAN_FILES
                 and len({member.path.rpartition("/")[0] for member in required}) == 1
             )
+            # Optional metadata and SARIF belong to the same root as the six
+            # required files. Keep the full visible index for Logs delivery.
+            self.result_members: tuple[ArchiveMember, ...] = ()
+            if self.has_scan_results:
+                root = required[0].path.rpartition("/")[0]
+                self.result_members = tuple(
+                    member for member in self.members
+                    if member.path.rpartition("/")[0] == root
+                )
         except BaseException:
             self.close()
             raise

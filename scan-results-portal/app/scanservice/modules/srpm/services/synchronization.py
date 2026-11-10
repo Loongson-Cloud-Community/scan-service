@@ -123,6 +123,7 @@ def _sync_build(
         logger.warning("SRPM archive budget exhausted: job=%s build=%s reason=%s", job, number, exc)
         return task
     valid_scan_archive = _find_valid_scan_archive(scan_archives)
+    result_archives = [valid_scan_archive] if valid_scan_archive else scan_archives
 
     artifact_paths = [
         artifact.get("relativePath") or artifact.get("fileName") or ""
@@ -157,12 +158,9 @@ def _sync_build(
         )
 
     def read_archive_artifact(basename: str) -> bytes | None:
-        archives = [valid_scan_archive] if valid_scan_archive else scan_archives
-        for archive in archives:
-            if archive is None:
-                continue
-            _, reader = archive
-            member = next((item for item in reader.members if item.name == basename), None)
+        for _, reader in result_archives:
+            members = reader.result_members if reader.has_scan_results else reader.members
+            member = next((item for item in members if item.name == basename), None)
             if member is None:
                 continue
             if member.size > limits.max_parse_bytes:
@@ -246,8 +244,9 @@ def _sync_build(
                 max_bytes=limits.max_parse_bytes,
             )
     else:
-        for _, reader in scan_archives:
-            member = next((item for item in reader.members if item.name.lower().endswith(".sarif")), None)
+        for _, reader in result_archives:
+            members = reader.result_members if reader.has_scan_results else reader.members
+            member = next((item for item in members if item.name.lower().endswith(".sarif")), None)
             if member is not None and member.size <= limits.max_parse_bytes:
                 try:
                     sarif_bytes = reader.read(member.path)
