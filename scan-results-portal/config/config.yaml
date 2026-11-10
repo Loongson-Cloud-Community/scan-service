@@ -1,25 +1,35 @@
 jenkins:
+  # 门户读取构建信息和产物的 Jenkins 地址，可由 JENKINS_BASE_URL 覆盖。
   base_url: ""
 
 sync:
   # 每批补偿同步的上限；按最久未尝试优先，不按最新构建号截断。
   recent_build_limit: 20
+  # 访问 Jenkins 时的网络操作超时（秒），不是扫描运行时长限制。
   request_timeout_seconds: 15
 
 artifacts:
+  # 同步解析时单个结果文件的大小上限（字节）。
   max_parse_bytes: 16777216
+  # 通过门户查看或下载单个 Jenkins 原始产物的大小上限（字节）。
   max_download_bytes: 1073741824
-  # 归档大小、成员数和解压大小同时作为单次 SRPM 同步的累计上限。
+  # 单个 SRPM 归档的大小上限（字节），也限制单次 SRPM 同步的累计归档下载量。
   max_archive_bytes: 134217728
+  # 单个 SRPM 归档的成员数上限（含目录），也限制单次 SRPM 同步的累计成员数。
   max_archive_members: 4096
+  # SRPM 归档中单个普通文件解压后的大小上限（字节）。
   max_archive_member_bytes: 67108864
+  # 单个 SRPM 归档内普通文件的总大小上限（字节），也限制单次 SRPM 同步的累计解压量。
   max_archive_uncompressed_bytes: 536870912
+  # SRPM 归档内普通文件总大小与归档大小的比值上限，用于拦截异常高压缩比。
   max_archive_compression_ratio: 200
-  # 包含损坏、超限及格式不支持的归档尝试；不限制扫描工具运行时长。
+  # 单次 SRPM 同步最多尝试的归档数，包含损坏、超限及格式不支持的归档。
   max_sync_archives: 16
 
 ui:
+  # 门户页面标题，可由 SCAN_SERVICE_TITLE 覆盖。
   title: Scan Results Portal
+  # 列表每页显示的记录数。
   page_size: 50
   # 仅控制页面显示时区，不改变数据库时间或 Agent 上报时间。
   timezone: Asia/Shanghai

@@ -22,7 +22,7 @@
 | `PORTAL_BIND_ADDRESS` / `PORTAL_HTTP_PORT` | 宿主机 HTTP 监听地址及端口，测试默认 `0.0.0.0:8081` |
 
 [config/config.yaml](config/config.yaml) 中的 `ui` 配置页面时区和分页大小，
-`artifacts` 配置产物解析、下载和解压限制。
+`artifacts` 配置产物解析、下载和解压限制，`sync` 配置单次主动同步的任务上限和访问 Jenkins 的网络超时。
 
 ## 数据保存
 
