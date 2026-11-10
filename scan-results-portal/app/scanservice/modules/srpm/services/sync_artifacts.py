@@ -1,28 +1,18 @@
 from __future__ import annotations
 
-import tarfile
+from collections.abc import Sequence
 from urllib.parse import quote
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..csmock.archive import ArchiveMember, list_visible_members
+from ..csmock.archive import ArchiveMember, CsmockArchive
 from ....jenkins import JenkinsClient
 from ..models import SrpmScanArtifact, SrpmScanTask
 from ..parsers.csmock import classify_artifact
 
 
 SRPM_ARTIFACT_PREFIX = "srpm-scan-artifacts/"
-REQUIRED_SCAN_FILES = frozenset(
-    {
-        "scan.ini",
-        "scan-results-summary.txt",
-        "scan-results.js",
-        "scan-results.err",
-        "scan-results.html",
-        "scan.log",
-    }
-)
 
 
 def is_srpm_artifact(path: str) -> bool:
@@ -96,22 +86,15 @@ def is_archive(path: str) -> bool:
 
 
 def find_valid_scan_archive(
-    archives: list[tuple[str, bytes, list[ArchiveMember]]]
-) -> tuple[str, bytes, list[ArchiveMember]] | None:
+    archives: list[tuple[str, CsmockArchive]]
+) -> tuple[str, CsmockArchive] | None:
     for archive in archives:
-        path, _, members = archive
+        path, reader = archive
         if not is_srpm_artifact(path):
             continue
         if not path.lower().endswith(".tar.xz"):
             continue
-        required = [member for member in members if member.name in REQUIRED_SCAN_FILES]
-        # Required files must describe one result, not a mixture of roots or
-        # ambiguous duplicate entries. Flat and NVR-prefixed archives are valid.
-        if (
-            len(required) == len(REQUIRED_SCAN_FILES)
-            and {member.name for member in required} == REQUIRED_SCAN_FILES
-            and len({member.path.rpartition("/")[0] for member in required}) == 1
-        ):
+        if reader.has_scan_results:
             return archive
     return None
 
@@ -120,7 +103,7 @@ def upsert_archive_members(
     session: Session,
     task: SrpmScanTask,
     archive_path: str,
-    members: list[ArchiveMember],
+    members: Sequence[ArchiveMember],
     top_level_names: set[str],
 ) -> None:
     if not is_srpm_artifact(archive_path):

@@ -12,7 +12,7 @@ from conftest import (
 from scanservice import resync as resync_module
 from scanservice.modules.srpm.models import SrpmScanSummary, SrpmScanTask
 from scanservice.modules.srpm.services.synchronization import (
-    _sync_build,
+    sync_build,
     sync_registered_tasks,
 )
 from scanservice.modules.srpm.services.sync_results import set_manifest
@@ -55,7 +55,7 @@ def test_sync_build_uses_sarif_summary_fallback(session, settings):
         },
     )
 
-    task = _sync_build(session, client, settings, 5, job="csmock-curl-test")
+    task = sync_build(session, client, settings, 5, job_full_name="csmock-curl-test")
     session.commit()
 
     assert task.srpm_name == "curl-8.4.0-9.ocs23.src.rpm"
@@ -100,7 +100,7 @@ def test_sync_build_ignores_rpm_artifacts_in_combined_job(session, settings):
         },
     )
 
-    task = _sync_build(session, client, settings, 8, job="scan-docker")
+    task = sync_build(session, client, settings, 8, job_full_name="scan-docker")
     session.commit()
 
     assert task.scan_result == "FINISHED"
@@ -160,8 +160,8 @@ def test_set_manifest_normalizes_nested_scanner_and_ignores_rpm(session):
 def test_sync_build_separates_jobs_with_same_build_number(session, settings):
     client = FakeJenkinsClient()
 
-    _sync_build(session, client, settings, 5, job="packages/curl")
-    _sync_build(session, client, settings, 5, job="packages/openssl")
+    sync_build(session, client, settings, 5, job_full_name="packages/curl")
+    sync_build(session, client, settings, 5, job_full_name="packages/openssl")
     session.commit()
 
     tasks = session.scalars(

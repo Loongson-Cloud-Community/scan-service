@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 
 from ....artifact_stream import artifact_stream_response
-from ..csmock.archive import ArchiveLimitError, list_visible_members, read_visible_member
+from ..csmock.archive import ArchiveLimitError, CsmockArchive
 from ....config import get_settings
 from ....jenkins import JenkinsArtifactTooLarge, JenkinsClient
 from ....artifact_policy import artifact_response_options
@@ -67,10 +67,8 @@ def read_artifact_content(task: SrpmScanTask, row: SrpmScanArtifact) -> bytes:
     if member_path is None:
         return content
     try:
-        visible = {item.path for item in list_visible_members(content, limits)}
-        if member_path not in visible:
-            raise KeyError(member_path)
-        return read_visible_member(content, member_path, limits)
+        with CsmockArchive(content, limits) as archive:
+            return archive.read(member_path)
     except ArchiveLimitError as exc:
         raise HTTPException(status_code=413, detail="archive exceeds resource limits") from exc
     except (KeyError, OSError, ValueError, tarfile.TarError) as exc:
@@ -161,10 +159,8 @@ def archive_member_response(task: SrpmScanTask, archive_ref: str) -> Response:
         client.close()
 
     try:
-        visible = {item.path for item in list_visible_members(content, limits)}
-        if member_path not in visible:
-            raise KeyError(member_path)
-        member_content = read_visible_member(content, member_path, limits)
+        with CsmockArchive(content, limits) as archive:
+            member_content = archive.read(member_path)
     except ArchiveLimitError as exc:
         raise HTTPException(status_code=413, detail="archive exceeds resource limits") from exc
     except (KeyError, OSError, ValueError, tarfile.TarError) as exc:

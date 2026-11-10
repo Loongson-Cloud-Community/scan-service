@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import ExitStack
 import configparser
 import json
 import tarfile
@@ -8,11 +9,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..csmock.archive import (
-    ArchiveMember,
-    list_visible_members,
-    read_visible_member,
-)
+from ..csmock.archive import CsmockArchive
 from ..csmock.acceptance import validated_exit_code
 from ....config import Settings
 from ....jenkins import JenkinsClient
@@ -28,7 +25,6 @@ from ..parsers.csmock import (
     summarize_findings,
 )
 from .sync_artifacts import (
-    REQUIRED_SCAN_FILES,
     artifact_url as _artifact_url,
     find_artifact as _find_artifact,
     find_valid_scan_archive as _find_valid_scan_archive,
@@ -64,6 +60,8 @@ def _sync_build(
     settings: Settings,
     build_number: int,
     job: str | None = None,
+    *,
+    archive_stack: ExitStack,
 ) -> SrpmScanTask:
     number = int(build_number)
     limits = settings.artifact_limits
@@ -111,7 +109,7 @@ def _sync_build(
         for path in [artifact.get("relativePath") or artifact.get("fileName") or ""]
         if path
     }
-    archive_contents: list[tuple[str, bytes, list[ArchiveMember]]] = []
+    scan_archives: list[tuple[str, CsmockArchive]] = []
     for artifact in artifacts:
         archive_path = artifact.get("relativePath") or artifact.get("fileName") or ""
         size = artifact.get("size")
@@ -126,12 +124,13 @@ def _sync_build(
                 archive_path,
                 max_bytes=limits.max_archive_bytes,
             )
-            members = list_visible_members(content, limits)
+            reader = archive_stack.enter_context(CsmockArchive(content, limits))
+            del content
         except (OSError, tarfile.TarError, ValueError):
             continue
-        archive_contents.append((archive_path, content, members))
-        _upsert_archive_members(session, task, archive_path, members, top_level_names)
-    valid_scan_archive = _find_valid_scan_archive(archive_contents)
+        scan_archives.append((archive_path, reader))
+        _upsert_archive_members(session, task, archive_path, reader.members, top_level_names)
+    valid_scan_archive = _find_valid_scan_archive(scan_archives)
 
     artifact_paths = [
         artifact.get("relativePath") or artifact.get("fileName") or ""
@@ -166,18 +165,18 @@ def _sync_build(
         )
 
     def read_archive_artifact(basename: str) -> bytes | None:
-        archives = [valid_scan_archive] if valid_scan_archive else archive_contents
+        archives = [valid_scan_archive] if valid_scan_archive else scan_archives
         for archive in archives:
             if archive is None:
                 continue
-            _, content, members = archive
-            member = next((item for item in members if item.name == basename), None)
+            _, reader = archive
+            member = next((item for item in reader.members if item.name == basename), None)
             if member is None:
                 continue
             if member.size > limits.max_parse_bytes:
                 continue
             try:
-                return read_visible_member(content, member.path, limits)
+                return reader.read(member.path)
             except (KeyError, OSError, tarfile.TarError):
                 continue
         return None
@@ -255,11 +254,11 @@ def _sync_build(
                 max_bytes=limits.max_parse_bytes,
             )
     else:
-        for _, content, members in archive_contents:
-            member = next((item for item in members if item.name.lower().endswith(".sarif")), None)
+        for _, reader in scan_archives:
+            member = next((item for item in reader.members if item.name.lower().endswith(".sarif")), None)
             if member is not None and member.size <= limits.max_parse_bytes:
                 try:
-                    sarif_bytes = read_visible_member(content, member.path, limits)
+                    sarif_bytes = reader.read(member.path)
                 except (KeyError, OSError, tarfile.TarError):
                     sarif_bytes = None
                 break
@@ -311,7 +310,9 @@ def sync_build(
     job_full_name: str | None = None,
 ) -> SrpmScanTask:
     """Synchronize one SRPM build using its explicit Jenkins Job identity."""
-    return _sync_build(session, client, settings, build_number, job=job_full_name)
+    with ExitStack() as archive_stack:
+        return _sync_build(session, client, settings, build_number,
+                           job=job_full_name, archive_stack=archive_stack)
 
 
 def _resync_task(
@@ -320,12 +321,12 @@ def _resync_task(
     settings: Settings,
     task: SrpmScanTask,
 ) -> SrpmScanTask:
-    return _sync_build(
+    return sync_build(
         session,
         client,
         settings,
         task.jenkins_build_number,
-        job=task.jenkins_job_full_name,
+        job_full_name=task.jenkins_job_full_name,
     )
 
 
