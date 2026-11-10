@@ -9,11 +9,14 @@ sync:
 artifacts:
   max_parse_bytes: 16777216
   max_download_bytes: 1073741824
+  # 归档大小、成员数和解压大小同时作为单次 SRPM 同步的累计上限。
   max_archive_bytes: 134217728
   max_archive_members: 4096
   max_archive_member_bytes: 67108864
   max_archive_uncompressed_bytes: 536870912
   max_archive_compression_ratio: 200
+  # 包含损坏、超限及格式不支持的归档尝试；不限制扫描工具运行时长。
+  max_sync_archives: 16
 
 ui:
   title: Scan Results Portal

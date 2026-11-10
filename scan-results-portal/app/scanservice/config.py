@@ -19,6 +19,7 @@ class ArtifactLimits:
     max_archive_member_bytes: int = 64 * 1024 * 1024
     max_archive_uncompressed_bytes: int = 512 * 1024 * 1024
     max_archive_compression_ratio: float = 200.0
+    max_sync_archives: int = 16
 
     def __post_init__(self) -> None:
         values = (
@@ -29,6 +30,7 @@ class ArtifactLimits:
             self.max_archive_member_bytes,
             self.max_archive_uncompressed_bytes,
             self.max_archive_compression_ratio,
+            self.max_sync_archives,
         )
         if any(value <= 0 for value in values):
             raise ValueError("artifact limits must all be positive")
@@ -132,6 +134,7 @@ class Settings:
                     200.0,
                 )
             ),
+            max_sync_archives=int(artifacts.get("max_sync_archives", 16)),
         )
 
         return cls(

@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from contextlib import ExitStack
 import configparser
 import json
+import logging
 import tarfile
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..csmock.archive import CsmockArchive
+from ..csmock.budget import ArchiveBudgetExceeded
 from ..csmock.acceptance import validated_exit_code
 from ....config import Settings
 from ....jenkins import JenkinsClient
@@ -28,9 +29,7 @@ from .sync_artifacts import (
     artifact_url as _artifact_url,
     find_artifact as _find_artifact,
     find_valid_scan_archive as _find_valid_scan_archive,
-    is_archive as _is_archive,
     is_srpm_artifact as _is_srpm_artifact,
-    upsert_archive_members as _upsert_archive_members,
     upsert_artifact as _upsert_artifact,
 )
 from .sync_results import (
@@ -38,6 +37,11 @@ from .sync_results import (
     set_ini as _set_ini,
     set_manifest as _set_manifest,
 )
+from .sync_archives import load_scan_archives
+
+
+logger = logging.getLogger(__name__)
+
 
 def _jenkins_time(milliseconds: Any) -> datetime | None:
     if not milliseconds:
@@ -103,33 +107,21 @@ def _sync_build(
         _upsert_artifact(session, task, artifact, client, job, number)
     session.flush()
 
-    top_level_names = {
-        str(artifact.get("fileName") or path.rsplit("/", 1)[-1])
-        for artifact in artifacts
-        for path in [artifact.get("relativePath") or artifact.get("fileName") or ""]
-        if path
-    }
-    scan_archives: list[tuple[str, CsmockArchive]] = []
-    for artifact in artifacts:
-        archive_path = artifact.get("relativePath") or artifact.get("fileName") or ""
-        size = artifact.get("size")
-        if not archive_path or not _is_archive(archive_path):
-            continue
-        if size is not None and int(size) > limits.max_archive_bytes:
-            continue
-        try:
-            content = client.get_artifact(
-                job,
-                number,
-                archive_path,
-                max_bytes=limits.max_archive_bytes,
-            )
-            reader = archive_stack.enter_context(CsmockArchive(content, limits))
-            del content
-        except (OSError, tarfile.TarError, ValueError):
-            continue
-        scan_archives.append((archive_path, reader))
-        _upsert_archive_members(session, task, archive_path, reader.members, top_level_names)
+    try:
+        scan_archives = load_scan_archives(session, client, task, artifacts, limits, archive_stack)
+    except ArchiveBudgetExceeded as exc:
+        # Resource exhaustion is a retryable synchronization failure, not
+        # evidence that csmock failed or that a partial result is complete.
+        known_failure = task.csmock_exit_code is not None and task.csmock_exit_code != 0
+        task.scan_result = FAILED if known_failure else state_without_results(
+            building=building,
+            ended=task.scan_finished_at is not None or task.finished_at is not None,
+        )
+        task.sync_status = "SYNCED" if known_failure else "ERROR"
+        task.sync_error = None if known_failure else str(exc)
+        task.last_synced_at = datetime.now(timezone.utc)
+        logger.warning("SRPM archive budget exhausted: job=%s build=%s reason=%s", job, number, exc)
+        return task
     valid_scan_archive = _find_valid_scan_archive(scan_archives)
 
     artifact_paths = [

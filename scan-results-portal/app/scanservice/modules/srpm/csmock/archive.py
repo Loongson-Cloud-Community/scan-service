@@ -7,6 +7,7 @@ import tarfile
 from tempfile import SpooledTemporaryFile
 
 from ....config import ArtifactLimits
+from .budget import ArchiveBudget, ArchiveLimitError
 
 
 @dataclass(frozen=True)
@@ -16,10 +17,6 @@ class ArchiveMember:
     path: str
     name: str
     size: int
-
-
-class ArchiveLimitError(ValueError):
-    pass
 
 
 def _parts(path: str) -> tuple[str, ...] | None:
@@ -65,14 +62,15 @@ class CsmockArchive:
     spilling beyond 1 MiB to a temporary file, and close it with the operation.
     """
 
-    def __init__(self, content: bytes, limits: ArtifactLimits | None = None) -> None:
+    def __init__(self, content: bytes, limits: ArtifactLimits | None = None,
+                 *, budget: ArchiveBudget | None = None) -> None:
         limits = limits or ArtifactLimits()
         if len(content) > limits.max_archive_bytes:
             raise ArchiveLimitError("archive exceeds the configured size limit")
         self._cache = SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
         self._offsets: dict[str, tuple[int, int]] = {}
         try:
-            self.members = self._index(content, limits)
+            self.members = self._index(content, limits, budget)
             required = [member for member in self.members if member.name in _REQUIRED_SCAN_FILES]
             self.has_scan_results = (
                 len(required) == len(_REQUIRED_SCAN_FILES)
@@ -83,18 +81,23 @@ class CsmockArchive:
             self.close()
             raise
 
-    def _index(self, content: bytes, limits: ArtifactLimits) -> tuple[ArchiveMember, ...]:
+    def _index(self, content: bytes, limits: ArtifactLimits,
+               budget: ArchiveBudget | None) -> tuple[ArchiveMember, ...]:
         visible: list[ArchiveMember] = []
         count = regular_file_bytes = 0
         with tarfile.open(fileobj=io.BytesIO(content), mode="r|*") as archive:
             for member in archive:
                 count += 1
+                if budget is not None:
+                    budget.member()
                 if count > limits.max_archive_members:
                     raise ArchiveLimitError("archive has too many members")
                 if not member.isfile():
                     continue
                 if member.size < 0:
                     raise tarfile.ReadError("negative archive member size")
+                if budget is not None:
+                    budget.expand(member.size)
                 if member.size > limits.max_archive_member_bytes:
                     raise ArchiveLimitError("archive member is too large")
                 regular_file_bytes += member.size
