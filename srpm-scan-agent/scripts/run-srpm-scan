@@ -156,8 +156,9 @@ create_cmd=(
     input_srpm=$3
     output_directory=$4
     owner=$5
+    whitelist='https://github.com/Loongson-Cloud-Community/known-false-positives.git'
     shift 5
-    csmock -r "$mock_config" "$@" --force -o "$archive_path" "$input_srpm"
+    csmock -r "$mock_config" "$@" --kfp-git-url "$whitelist" --force -o "$archive_path" "$input_srpm"
     sudo chown -R "$owner" -- "$output_directory"
   ' run-srpm-scan "$MOCK_CONFIG" "$container_output/$nvr.tar.xz" \
     "/input/$srpm_name" "$container_output" "$(id -u):$(id -g)" "${csmock_tools_opt[@]}"
