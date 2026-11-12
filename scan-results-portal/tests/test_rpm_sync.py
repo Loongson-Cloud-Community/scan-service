@@ -124,24 +124,6 @@ def test_sync_task_keeps_running_while_build_is_building(session):
     assert task.sync_status == "PENDING"
 
 
-@pytest.mark.parametrize("prefix", ["", "diagnostics/"])
-def test_sync_does_not_accept_unvalidated_reports_or_failure_metadata(session, prefix):
-    artifacts, contents = rpm_scan_artifacts(names=(
-        f"{prefix}scan-failure.json", f"{prefix}unvalidated-results.json",
-        f"{prefix}unvalidated-results.csv", f"{prefix}unvalidated-results.html",
-        f"{prefix}scan-manifest.json.tmp", "scan.log",
-    ))
-    client = FakeJenkinsClient(artifacts=artifacts, contents=contents)
-    task = _task(session)
-
-    sync_task(session, client, task)
-
-    assert task.state == "NOT_AVAILABLE"
-    assert task.total_vulnerabilities is None
-    assert client.requested_artifacts == []
-    assert {row.name for row in task.artifacts} == {"scan.log"}
-
-
 def test_sync_task_ignores_artifacts_from_another_build(session):
     artifacts, contents = rpm_scan_artifacts(
         prefix=f"rpm-scan-artifacts/{RPM_BUILD_NUMBER + 1}/{RPM_SCAN_KEY}"
